@@ -1,0 +1,149 @@
+{
+  "Climb": "wEb1",
+  "moves": [
+    {
+      "status": "complete",
+      "description": "Setup Go Backend Structure",
+      "details": "Initialize Go modules (if needed). Choose a web framework (e.g., Gin or Echo). Set up basic project structure (e.g., cmd/, internal/, pkg/) and a minimal HTTP server."
+    },
+    {
+      "status": "complete",
+      "description": "Refactor Configuration Logic",
+      "details": "Extract configuration loading (from config.json/env/defaults) from main CLI logic into a reusable package/struct."
+    },
+    {
+      "status": "complete",
+      "description": "Implement Config API Endpoints",
+      "details": "Create backend API endpoints (e.g., GET /api/config, POST /api/config) to fetch and update configuration using the refactored logic."
+    },
+    {
+      "status": "climbing",
+      "description": "Setup Frontend Project",
+      "details": "Initialize a new Vite project with React 19 and TypeScript. Install and configure Tailwind CSS 4 and shadcn/ui."
+    },
+    {
+      "status": "todo",
+      "description": "Create Basic Frontend Layout",
+      "details": "Implement the main application layout structure (e.g., header, main content area) using shadcn/ui components."
+    },
+    {
+      "status": "todo",
+      "description": "Build Frontend Configuration UI",
+      "details": "Create React components for displaying and editing configuration settings (credentials, formats, paths, FFmpeg options)."
+    },
+    {
+      "status": "todo",
+      "description": "Connect Frontend Config to API",
+      "details": "Integrate the frontend configuration UI with the backend GET/POST /api/config endpoints.",
+      "rest": true
+    },
+    {
+      "status": "todo",
+      "description": "Refactor Core Download Logic",
+      "details": "Isolate the core nugs.net download functionality (authentication, metadata fetching, downloading, FFmpeg handling) from CLI argument parsing into callable Go functions/methods."
+    },
+    {
+      "status": "todo",
+      "description": "Implement Backend Download Queue",
+      "details": "Create data structures and logic in Go to manage a queue of download jobs (in-memory for now). Include job details like URL, options, status."
+    },
+    {
+      "status": "todo",
+      "description": "Implement Add-to-Queue API Endpoint",
+      "details": "Create a backend API endpoint (e.g., POST /api/downloads) that accepts download request parameters and adds a new job to the queue."
+    },
+    {
+      "status": "todo",
+      "description": "Implement Backend Queue Worker",
+      "details": "Create a background worker (using goroutines) that processes jobs from the download queue sequentially, calling the refactored core download logic."
+    },
+    {
+      "status": "todo",
+      "description": "Implement Basic Status API Endpoint",
+      "details": "Create a basic backend API endpoint (e.g., GET /api/downloads) to retrieve the current list of download jobs and their status."
+    },
+    {
+      "status": "todo",
+      "description": "Build Frontend Download Input UI",
+      "details": "Create React components for inputting nugs.net URLs and selecting download options (formats, flags)."
+    },
+    {
+      "status": "todo",
+      "description": "Connect Frontend Input to API",
+      "details": "Integrate the frontend download input UI with the backend POST /api/downloads endpoint to add jobs to the queue."
+    },
+    {
+      "status": "todo",
+      "description": "Build Basic Frontend Queue Display",
+      "details": "Create React components to display the list of download jobs fetched from the GET /api/downloads endpoint.",
+      "rest": true
+    },
+    {
+      "status": "todo",
+      "description": "Enhance Download Logic for Real-time Feedback",
+      "details": "Modify the refactored core download logic to report progress updates (percentage, speed, status changes, logs) via channels or callbacks."
+    },
+    {
+      "status": "todo",
+      "description": "Implement Backend Real-time Update Mechanism",
+      "details": "Set up a WebSocket or Server-Sent Events endpoint (e.g., /ws/status) in the Go backend to broadcast download progress updates."
+    },
+    {
+      "status": "todo",
+      "description": "Integrate Worker with Real-time Updates",
+      "details": "Modify the backend queue worker to push progress updates received from the core download logic to connected clients via the WebSocket/SSE endpoint."
+    },
+    {
+      "status": "todo",
+      "description": "Implement Frontend Real-time Client",
+      "details": "Add WebSocket/SSE client logic to the React frontend to connect to the backend and receive real-time updates."
+    },
+    {
+      "status": "todo",
+      "description": "Enhance Frontend Queue Display for Real-time",
+      "details": "Update the queue display components to reflect real-time status, progress, and logs received via WebSocket/SSE.",
+      "rest": true
+    },
+    {
+      "status": "todo",
+      "description": "Implement Artwork Fetching Logic",
+      "details": "Add logic to the backend (potentially in the core downloader or API layer) to extract or fetch album/video artwork URLs from nugs.net metadata."
+    },
+    {
+      "status": "todo",
+      "description": "Implement Artwork API Endpoint",
+      "details": "Create a backend endpoint (or modify existing status endpoint) to provide artwork URLs alongside download job data."
+    },
+    {
+      "status": "todo",
+      "description": "Display Artwork in Frontend",
+      "details": "Update the frontend queue display components to show the artwork fetched via the API."
+    },
+    {
+      "status": "todo",
+      "description": "Implement Queue Management API Endpoints",
+      "details": "Create backend API endpoints for managing the queue (e.g., DELETE /api/downloads/{jobId}, POST /api/downloads/reorder)."
+    },
+    {
+      "status": "todo",
+      "description": "Build Frontend Queue Management UI",
+      "details": "Add UI elements (buttons, drag-and-drop?) to the frontend for removing or reordering jobs in the queue, connected to the management API endpoints."
+    },
+    {
+      "status": "todo",
+      "description": "Implement Frontend Share Functionality",
+      "details": "Add a 'Copy Original URL' button to completed download items in the UI."
+    },
+    {
+      "status": "todo",
+      "description": "UI Refinement and Styling",
+      "details": "Perform general UI cleanup, improve styling consistency, add loading states, and enhance error handling throughout the frontend.",
+      "rest": true
+    },
+    {
+      "status": "todo",
+      "description": "End-to-End Testing",
+      "details": "Conduct thorough testing of all features: configuration, adding downloads, queue behavior, real-time updates, artwork, sharing, error conditions."
+    }
+  ]
+} 
