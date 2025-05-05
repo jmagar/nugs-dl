@@ -1,0 +1,16 @@
+# Ignore sensitive configuration files explicitly for Cursor AI features
+!.env.example
+
+
+# Ignore Go build artifacts (redundant with .gitignore but explicit)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+nugs-dl 
+nugs-server
+
+# Ignore frontend build artifacts (redundant with .gitignore but explicit)
+webui/dist/
+webui/.vite/ 

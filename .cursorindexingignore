@@ -1,0 +1,13 @@
+# Exclude build artifacts from indexing only (AI can still access if needed)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+nugs-dl 
+nugs-server
+webui/dist/
+webui/.vite/
+
+# Exclude large dependency directories from indexing only
+# webui/node_modules/ # Note: Also in .gitignore, but can be explicit here 

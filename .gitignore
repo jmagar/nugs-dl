@@ -1,0 +1,42 @@
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+nugs-dl # Original binary name if built
+nugs-server # New server binary name
+
+# Node / Frontend artifacts
+webui/node_modules/
+webui/dist/
+webui/.vite/
+.npm
+*.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE / Editor files
+.idea/
+.vscode/
+*.swp
+*~
+
+# Project specific ignores
+config.json
+.env
+.env.*
+!.env.example
+
