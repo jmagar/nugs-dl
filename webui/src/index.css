@@ -1,1 +1,48 @@
 @import "tailwindcss";
+
+@layer base {
+  :root {
+    /* Design System Colors from UI Spec */
+    --background: 17 24 39; /* Equivalent to #111827 (gray-900) for bg-background utilities */
+    --foreground: 255 255 255;      /* #ffffff for text-foreground */
+
+    --card: 31 41 55; /* Equivalent to rgba(31, 41, 55, 0.5) for card-background, alpha handled by usage */
+    --card-foreground: 255 255 255;
+
+    --popover: 31 41 55; /* Similar to card */
+    --popover-foreground: 255 255 255;
+
+    --primary: 168 85 247;         /* #a855f7 purple-500 */
+    --primary-foreground: 255 255 255;
+
+    --secondary: 31 41 55; /* rgba(31, 41, 55, 0.5) */
+    --secondary-foreground: 156 163 175; /* #9ca3af gray-400 */
+
+    --muted: 17 24 39; /* rgba(17, 24, 39, 0.3) */
+    --muted-foreground: 107 114 128;    /* #6b7280 gray-500 */
+
+    --accent: 168 85 247;           /* #a855f7 purple-500 */
+    --accent-foreground: 255 255 255;
+
+    --destructive: 239 68 68;        /* #ef4444 red-500 */
+    --destructive-foreground: 255 255 255;
+
+    /* Updated border colors to be much darker and more subtle */
+    --border: 17 24 39; /* Near black with opacity, much darker for subtle borders */
+    --input: 17 24 39;   /* For input borders, same as border */
+    
+    --ring: 168 85 247; /* #a855f7 purple-500 for ring color, opacity applied in utility e.g. ring-primary-accent/20 */
+
+    --radius: 0.75rem; /* lg / rounded-xl from tailwind.config.js */
+  }
+
+  body {
+    @apply bg-gradient-to-b from-gray-900 to-black text-white font-sans;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+}
+
+/* Remove @theme inline block as Tailwind processes this directly from config now */

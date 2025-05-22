@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"fmt"
 	"time"
 
 	api "nugs-dl/pkg/api"
@@ -179,9 +180,13 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 	wc.Downloaded += int64(n)
 
 	now := time.Now().UnixMilli()
-	// Throttle progress updates
-	if wc.Total > 0 && now-wc.lastUpdateTime < progressUpdateInterval {
-		// Only throttle if we know the total size (avoid missing final update for unknown size)
+	
+	// Always send first progress update, then throttle subsequent ones
+	shouldSendUpdate := wc.lastUpdateTime == 0 || // First update
+		(wc.Total > 0 && now-wc.lastUpdateTime >= progressUpdateInterval) || // Regular throttled updates
+		(wc.Total <= 0 && now-wc.lastUpdateTime >= progressUpdateInterval/2) // More frequent updates for unknown size
+		
+	if !shouldSendUpdate {
 		return n, nil // Not time to update yet
 	}
 	wc.lastUpdateTime = now
@@ -192,7 +197,8 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 	if wc.Total > 0 {
 		percentage = float64(wc.Downloaded) / float64(wc.Total) * 100.0
 	} else {
-		// Estimate percentage based on time if total is unknown? Or just send bytes.
+		// For unknown size, show progress as bytes downloaded instead of percentage
+		// Frontend will handle this appropriately
 		percentage = -1 // Indicate unknown percentage
 	}
 
@@ -211,13 +217,19 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 			SpeedBPS:        speedBps,
 			// Status, Message, CurrentFile are set by the calling function via sendProgress
 		}
+		
+		fmt.Printf("[WriteCounter] Job %s: Downloaded %d/%d bytes (%.1f%%), Speed: %d B/s\n", 
+			wc.JobID, wc.Downloaded, wc.Total, percentage, speedBps)
+		
 		// Use non-blocking send
 		select {
 		case wc.ProgressChan <- update:
+			fmt.Printf("[WriteCounter] Progress update sent for Job %s\n", wc.JobID)
 		default:
-			// Log sparingly if channel is full
-			// fmt.Printf("[WriteCounter Warning] Progress channel full for Job %s, discarding update.\n", wc.JobID)
+			fmt.Printf("[WriteCounter Warning] Progress channel full for Job %s, discarding update.\n", wc.JobID)
 		}
+	} else {
+		fmt.Printf("[WriteCounter] Progress channel is nil for Job %s\n", wc.JobID)
 	}
 
 	return n, nil

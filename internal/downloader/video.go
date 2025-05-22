@@ -295,6 +295,9 @@ func (d *Downloader) processVideo(jobID, videoID, uguID string, opts DownloadOpt
 	videoFnameBase := meta.ArtistName + " - " + strings.TrimRight(meta.ContainerInfo, " ")
 	fmt.Println("Video:", videoFnameBase)
 
+	// Update job title with the video information
+	d.QueueMgr.UpdateJobTitle(jobID, videoFnameBase)
+
 	vidPathNoExt := filepath.Join(d.Config.OutPath, SanitizeFilename(videoFnameBase+"_"+chosenResStr))
 	vidPathTs := vidPathNoExt + ".ts"   // Path for raw downloaded segments
 	vidPathMp4 := vidPathNoExt + ".mp4" // Final output path

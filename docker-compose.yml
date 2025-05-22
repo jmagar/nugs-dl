@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  nugs-dl:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nugs-dl
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount downloads directory to persist downloaded files
+      - ./downloads:/app/downloads
+      # Mount config directory to persist configuration (includes config.json)
+      - ./config:/app/config
+    environment:
+      # Set timezone
+      - TZ=America/New_York
+      # Optional: Set custom output path (defaults to /app/downloads)
+      - NUGS_OUTPUT_PATH=/app/downloads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+  # Optional: Add a reverse proxy for HTTPS/domain access
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: nugs-dl-proxy
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/ssl/certs:ro
+  #   depends_on:
+  #     - nugs-dl
+  #   restart: unless-stopped
+
+# Create named volumes for easier management
+volumes:
+  downloads:
+    driver: local
+  config:
+    driver: local
+
+# Optional: Create custom network
+networks:
+  nugs-dl-network:
+    driver: bridge 

@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+README.md
+
+# Development files
+.vscode/
+.idea/
+*.log
+
+# Node.js
+webui/node_modules/
+webui/dist/
+webui/.next/
+webui/.turbo/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+vendor/
+
+# Build artifacts
+nugs-server
+main
+
+# Runtime/Config
+downloads/
+config.json
+token.md
+
+# Docker
+Dockerfile
+docker compose.yml
+.dockerignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/ 

@@ -1,144 +1,347 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Toaster } from "@/components/ui/sonner"
-import { ConfigForm } from "@/components/ConfigForm"
-import { DownloadForm } from "@/components/DownloadForm"
-import { QueueDisplay } from "@/components/QueueDisplay"
+import { useState, useEffect, useCallback } from 'react';
+import { Toaster } from "sonner"
 import { Button } from "@/components/ui/button"
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger, SheetFooter, SheetClose } from "@/components/ui/sheet"
-import { Settings, Moon, Sun } from "lucide-react"
-import { useTheme } from "next-themes"
-import { toast } from "sonner"
-import { type AppConfig } from "@/types/api"
+import { Settings, Music2, Terminal, DownloadIcon, ListIcon, HistoryIcon } from "lucide-react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import DownloadManager from "@/components/DownloadManager"
+import QueueManager from "@/components/QueueManager"
+import HistoryManager from "@/components/HistoryManager"
+import ConfigurationDialog from "@/components/ConfigurationDialog"
+import QuickHelp from "@/components/QuickHelp"
+import { SKIP_TO_CONTENT_CLASS, setupKeyboardUserDetection, applyKeyboardUserStyles } from '@/lib/accessibility';
+import { type DownloadJob, type ProgressUpdate, type SSEEvent } from "@/types/api"
 
-function ThemeToggle() {
-  const { setTheme, theme } = useTheme();
-
+const AppHeader = () => {
+  const [configOpen, setConfigOpen] = useState(false)
+  
   return (
-    <Button
-      variant="ghost"
-      size="icon"
-      onClick={() => setTheme(theme === "light" ? "dark" : "light")}
-      aria-label="Toggle theme"
-    >
-      <Sun className="h-[1.2rem] w-[1.2rem] rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-      <Moon className="absolute h-[1.2rem] w-[1.2rem] rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-    </Button>
+    <header className="flex items-center justify-between mb-8">
+      <div className="flex items-center gap-3">
+        <div className="rounded-md bg-purple-500/20 p-2">
+          <Music2 className="h-5 w-5 text-purple-400" />
+        </div>
+        <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 text-transparent bg-clip-text">
+          nugs-dl
+        </h1>
+      </div>
+      <Button 
+        variant="ghost" 
+        size="icon" 
+        className="h-10 w-10 text-gray-400 hover:text-white hover:bg-gray-800/50"
+        onClick={() => setConfigOpen(true)}
+        aria-label="Open settings"
+        aria-haspopup="dialog"
+      >
+        <Settings className="h-5 w-5" />
+      </Button>
+      <ConfigurationDialog open={configOpen} onOpenChange={setConfigOpen} />
+    </header>
   );
+};
+
+const AppFooter = () => {
+  return (
+    <footer className="mt-8 pt-6 border-t border-gray-800">
+      <div className="flex items-center justify-between text-sm text-gray-400">
+        <div className="flex items-center gap-2">
+          <Terminal className="h-4 w-4" aria-hidden="true" />
+          <span>Nugs-Downloader Web UI</span>
+        </div>
+        <span>v1.0.0</span>
+      </div>
+    </footer>
+  );
+};
+
+const MainContentTabs = () => {
+    const [activeTab, setActiveTab] = useState("download")
+    const [jobs, setJobs] = useState<Record<string, DownloadJob>>({})
+    const [isLoading, setIsLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
+
+    const switchToQueue = () => {
+        setActiveTab("queue")
+    }
+
+
+
+    // Handle progress updates from SSE
+    const handleProgressUpdate = useCallback((update: ProgressUpdate) => {
+        console.log("[App] handleProgressUpdate called with:", update)
+        
+        setJobs(prevJobs => {
+            const jobId = update.jobId
+            const existingJob = prevJobs[jobId]
+            if (!existingJob) {
+                console.warn(`Received progress for unknown job ID: ${jobId}`)
+                return prevJobs
+            }
+            
+            const updatedJob = { ...existingJob }
+            if (update.status) updatedJob.status = update.status
+            if (update.currentFile) updatedJob.currentFile = update.currentFile
+            
+            // Preserve the job title - don't let progress updates override it
+            // The title should be set by the backend when processing starts
+            
+            // Store track information
+            if (update.currentTrack) updatedJob.currentTrack = update.currentTrack
+            if (update.totalTracks) updatedJob.totalTracks = update.totalTracks
+            
+            // Use track-based progress if available, otherwise fall back to percentage
+            if (update.currentTrack && update.totalTracks) {
+                // Calculate progress based on completed tracks
+                updatedJob.progress = Math.round((update.currentTrack - 1) / update.totalTracks * 100)
+                console.log(`[App] Track-based progress: ${update.currentTrack}/${update.totalTracks} = ${updatedJob.progress}%`)
+            } else {
+                updatedJob.progress = update.percentage < 0 ? -1 : Math.round(update.percentage)
+            }
+            
+            updatedJob.speedBps = update.speedBps
+            if (update.status === 'failed' && update.message) {
+                updatedJob.errorMessage = update.message
+            } else if (update.status !== 'failed') {
+                updatedJob.errorMessage = undefined
+            }
+            const nowStr = new Date().toISOString()
+            if (update.status === 'processing' && !updatedJob.startedAt) updatedJob.startedAt = nowStr
+            if ((update.status === 'complete' || update.status === 'failed') && !updatedJob.completedAt) {
+                updatedJob.completedAt = nowStr
+                if (update.status === 'complete') updatedJob.progress = 100
+            }
+            
+            return { ...prevJobs, [jobId]: updatedJob }
+        })
+    }, [])
+
+
+
+    // Load initial jobs and set up SSE - moved to App level
+    useEffect(() => {
+        let isMounted = true
+        let eventSource: EventSource | null = null
+
+        const fetchInitialJobs = async () => {
+            console.log("[App] Fetching initial jobs...")
+            setIsLoading(true)
+            setError(null)
+            try {
+                const response = await fetch('/api/downloads')
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch initial jobs: ${response.statusText}`)
+                }
+                const initialJobs: DownloadJob[] = await response.json()
+                if (isMounted) {
+                    const initialJobMap: Record<string, DownloadJob> = {}
+                    initialJobs.forEach(job => {
+                         initialJobMap[job.id] = job 
+                    })
+                    setJobs(initialJobMap)
+                    setError(null)
+                }
+            } catch (err: unknown) { 
+                if (isMounted) {
+                     console.error("Error fetching initial jobs:", err)
+                     const errorMessage = err instanceof Error ? err.message : 'Failed to load job queue initially.'
+                     setError(errorMessage)
+                 }
+            } finally { 
+                if (isMounted) {
+                    setIsLoading(false)
+                }
+            }
+        }
+
+        const connectSSE = () => {
+            if (!isMounted) return
+            console.log("[App] Connecting to SSE stream...")
+            eventSource = new EventSource('/api/status-stream')
+
+            // Listen for specific event types
+            eventSource.addEventListener('jobAdded', (event) => {
+                if (!isMounted) return
+                try {
+                    const sseEvent: SSEEvent = JSON.parse(event.data)
+                    console.log("[App] Received jobAdded event:", sseEvent.data)
+                    const newJob = sseEvent.data as DownloadJob
+                    setJobs(prevJobs => ({ ...prevJobs, [newJob.id]: newJob }))
+                } catch (e) {
+                    console.error("Failed to parse jobAdded event:", e, "Data:", event.data)
+                }
+            })
+
+            eventSource.addEventListener('progressUpdate', (event) => {
+                if (!isMounted) return
+                try {
+                    const sseEvent: SSEEvent = JSON.parse(event.data)
+                    console.log("[App] Received progressUpdate event:", sseEvent.data)
+                    handleProgressUpdate(sseEvent.data as ProgressUpdate)
+                } catch (e) {
+                    console.error("Failed to parse progressUpdate event:", e, "Data:", event.data)
+                }
+            })
+
+            eventSource.addEventListener('jobStatusUpdate', (event) => {
+                if (!isMounted) return
+                try {
+                    const sseEvent: SSEEvent = JSON.parse(event.data)
+                    console.log("[App] Received jobStatusUpdate event:", sseEvent.data)
+                    const updatedJob = sseEvent.data as DownloadJob
+                    setJobs(prevJobs => ({ ...prevJobs, [updatedJob.id]: updatedJob }))
+                } catch (e) {
+                    console.error("Failed to parse jobStatusUpdate event:", e, "Data:", event.data)
+                }
+            })
+
+            eventSource.addEventListener('open', () => {
+                console.log("[App] SSE connection opened")
+            })
+
+            eventSource.onerror = (err) => {
+                console.error("SSE Error:", err)
+                if (isMounted && eventSource?.readyState === EventSource.CLOSED) {
+                    console.log("[App] SSE connection closed, attempting reconnect in 2 seconds...")
+                    setTimeout(() => {
+                        if (isMounted) {
+                            connectSSE()
+                        }
+                    }, 2000)
+                }
+            }
+
+            // Handle page visibility changes to reconnect when tab becomes active
+            const handleVisibilityChange = () => {
+                if (!document.hidden && isMounted && eventSource?.readyState === EventSource.CLOSED) {
+                    console.log("[App] Tab became active, reconnecting SSE...")
+                    connectSSE()
+                }
+            }
+
+            document.addEventListener('visibilitychange', handleVisibilityChange)
+
+            return () => {
+                document.removeEventListener('visibilitychange', handleVisibilityChange)
+            }
+        }
+
+        fetchInitialJobs().then(() => {
+            const cleanup = connectSSE()
+            return cleanup
+        })
+
+        return () => {
+            console.log("[App] Cleaning up SSE connection.")
+            isMounted = false
+            eventSource?.close()
+        }
+    }, [handleProgressUpdate])
+
+    return (
+        <div className="w-full max-w-4xl mx-auto space-y-8">
+            <section className="text-center space-y-6">
+                <h1 className="text-4xl md:text-6xl font-bold leading-tight tracking-tight">
+                    Download from <span className="bg-gradient-to-r from-purple-400 via-pink-400 to-purple-600 text-transparent bg-clip-text animate-gradient-x">nugs.net</span> with ease
+                </h1>
+                <p className="text-xl text-gray-300 max-w-3xl mx-auto leading-relaxed">
+                    A powerful tool to download albums, videos, and livestreams from nugs.net in your preferred quality.
+                </p>
+            </section>
+
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+                <div className="flex justify-center mb-6">
+                    <TabsList className="bg-gray-800/50 backdrop-blur-sm border border-gray-700">
+                        <TabsTrigger 
+                            value="download" 
+                            className="flex items-center gap-2 px-6 py-2 text-sm data-[state=active]:bg-gray-700 data-[state=active]:text-purple-300"
+                        >
+                            <DownloadIcon className="h-4 w-4 text-purple-400 data-[state=active]:text-purple-300" />
+                            Download
+                        </TabsTrigger>
+                        <TabsTrigger 
+                            value="queue" 
+                            className="flex items-center gap-2 px-6 py-2 text-sm data-[state=active]:bg-gray-700 data-[state=active]:text-purple-300"
+                        >
+                            <ListIcon className="h-4 w-4 text-purple-400 data-[state=active]:text-purple-300" />
+                            Queue
+                        </TabsTrigger>
+                        <TabsTrigger 
+                            value="history" 
+                            className="flex items-center gap-2 px-6 py-2 text-sm data-[state=active]:bg-gray-700 data-[state=active]:text-purple-300"
+                        >
+                            <HistoryIcon className="h-4 w-4 text-purple-400 data-[state=active]:text-purple-300" />
+                            History
+                        </TabsTrigger>
+                    </TabsList>
+                </div>
+                
+                <TabsContent value="download" className="space-y-6">
+                    <div className="bg-gray-800/60 backdrop-blur-sm border border-gray-700/50 rounded-xl p-8 shadow-xl shadow-purple-500/10 hover:shadow-purple-500/20 transition-all duration-300">
+                        <DownloadManager onStartDownload={switchToQueue} />
+                    </div>
+                </TabsContent>
+                
+                <TabsContent value="queue" className="space-y-6">
+                    <div className="bg-gray-800/60 backdrop-blur-sm border border-gray-700/50 rounded-xl p-8 shadow-xl shadow-purple-500/10 hover:shadow-purple-500/20 transition-all duration-300">
+                        <QueueManager jobs={jobs} isLoading={isLoading} error={error} />
+                    </div>
+                </TabsContent>
+                
+                <TabsContent value="history" className="space-y-6">
+                    <div className="bg-gray-800/60 backdrop-blur-sm border border-gray-700/50 rounded-xl p-8 shadow-xl shadow-purple-500/10 hover:shadow-purple-500/20 transition-all duration-300">
+                        <HistoryManager />
+                    </div>
+                </TabsContent>
+            </Tabs>
+            
+            <QuickHelp />
+        </div>
+    );
 }
 
 function App() {
-  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
-  const [isConfigLoading, setIsConfigLoading] = useState(true);
-  const [configError, setConfigError] = useState<string | null>(null);
-  const [isSavingConfig, setIsSavingConfig] = useState(false);
-
+  // Set up keyboard navigation detection
   useEffect(() => {
-    let isMounted = true;
-    const fetchConfig = async () => {
-      setIsConfigLoading(true);
-      setConfigError(null);
-      try {
-        const response = await fetch('/api/config');
-        if (!response.ok) {
-          throw new Error(`Failed to fetch config: ${response.statusText}`);
+    setupKeyboardUserDetection();
+    applyKeyboardUserStyles();
+    
+    // Add an announcement when the app loads for screen readers
+    const announceAppReady = () => {
+      const announcer = document.createElement('div');
+      announcer.id = 'app-announcer';
+      announcer.className = 'sr-only';
+      announcer.setAttribute('aria-live', 'polite');
+      announcer.textContent = 'Nugs Downloader application loaded. Use tab to navigate.';
+      document.body.appendChild(announcer);
+      
+      // Remove the announcement after it's been read
+      setTimeout(() => {
+        if (announcer.parentNode) {
+          announcer.parentNode.removeChild(announcer);
         }
-        const data: AppConfig = await response.json();
-        if (isMounted) setAppConfig(data);
-      } catch (err: unknown) {
-        if (isMounted) {
-            const msg = err instanceof Error ? err.message : 'Failed to load configuration.';
-            setConfigError(msg);
-            toast.error(msg);
-        }
-      } finally {
-        if (isMounted) setIsConfigLoading(false);
-      }
+      }, 3000);
     };
-    fetchConfig();
-    return () => { isMounted = false; }
-  }, []);
-
-  const handleSaveConfig = useCallback(async (configToSave: AppConfig) => {
-    setIsSavingConfig(true);
-    setConfigError(null);
-    toast.info("Saving configuration...");
-    try {
-      const response = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(configToSave),
-      });
-      if (!response.ok) {
-         let errorMsg = `HTTP error! status: ${response.status}`;
-         try { 
-             const errorData = await response.json(); 
-             errorMsg = errorData.error || errorMsg; 
-         } catch (jsonErr) { 
-            // Ignore JSON parsing error, keep the status-based message
-            console.warn("Could not parse error response body:", jsonErr);
-         } 
-         throw new Error(errorMsg);
-      }
-      const savedConfig: AppConfig = await response.json();
-      setAppConfig(savedConfig);
-      toast.success("Configuration saved successfully!");
-    } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : 'Unknown error occurred';
-        setConfigError(msg);
-        toast.error(`Failed to save configuration: ${msg}`);
-    } finally {
-        setIsSavingConfig(false);
-    }
+    
+    announceAppReady();
   }, []);
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col items-center p-4 md:p-8">
-      <header className="w-full max-w-4xl mb-6 flex justify-between items-center">
-        <h1 className="text-2xl md:text-3xl font-bold">Nugs DL Web UI</h1>
-        <div className="flex items-center gap-2">
-          <Sheet>
-            <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Open Settings">
-                <Settings className="h-[1.2rem] w-[1.2rem]" />
-              </Button>
-            </SheetTrigger>
-            <SheetContent>
-              <SheetHeader>
-                <SheetTitle>Configuration</SheetTitle>
-                <SheetDescription>
-                  Manage nugs.net credentials and default download settings.
-                  {configError && <p className="text-sm font-medium text-destructive pt-2">Error: {configError}</p>}
-                </SheetDescription>
-              </SheetHeader>
-              <div className="py-4">
-                <ConfigForm 
-                  key={JSON.stringify(appConfig)}
-                  initialConfig={appConfig} 
-                  isLoading={isConfigLoading || isSavingConfig}
-                  onSubmit={handleSaveConfig}
-                />
-              </div>
-              <SheetFooter>
-                <SheetClose asChild>
-                    <Button variant="outline">Cancel</Button>
-                </SheetClose>
-                <Button type="submit" form="config-form" disabled={isSavingConfig}>
-                    {isSavingConfig ? "Saving..." : "Save Changes"}
-                </Button>
-              </SheetFooter>
-            </SheetContent>
-          </Sheet>
-          <ThemeToggle />
-        </div>
-      </header>
-      <main className="w-full max-w-4xl flex-grow space-y-8">
-        <DownloadForm />
-        <QueueDisplay />
+    <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white">
+      {/* Skip to content link for keyboard users */}
+      <a href="#main-content" className={SKIP_TO_CONTENT_CLASS}>
+        Skip to main content
+      </a>
+      
+      <main 
+        id="main-content" 
+        className="container mx-auto px-4 py-8"
+        tabIndex={-1} // Makes the main content focusable by skip link
+      >
+        <AppHeader />
+        <MainContentTabs />
+        <AppFooter />
       </main>
-      <footer className="w-full max-w-4xl mt-12 text-center text-xs text-muted-foreground">
-        {/* Footer content if needed */}
-      </footer>
-      <Toaster richColors />
+      
+      <Toaster richColors closeButton theme="dark" />
     </div>
   )
 }

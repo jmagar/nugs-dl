@@ -26,6 +26,7 @@ export interface DownloadOptions {
 export interface DownloadJob {
   id: string;             
   originalUrl: string;    
+  title?: string;         
   options: DownloadOptions; 
   status: JobStatus;       
   errorMessage?: string;   
@@ -35,7 +36,10 @@ export interface DownloadJob {
   progress: number;       
   currentFile?: string;   
   speedBps: number;       
-  artworkUrl?: string;    
+  artworkUrl?: string;
+  // Track information
+  currentTrack?: number;
+  totalTracks?: number;
 }
 
 export interface AddDownloadRequest {
@@ -58,6 +62,9 @@ export interface ProgressUpdate {
   speedBps: number;       
   bytesDownloaded: number;
   totalBytes: number;
+  // Track-based progress information
+  currentTrack?: number;  // Current track number (1-based)
+  totalTracks?: number;   // Total number of tracks
 }
 
 // --- SSE Event Structure ---

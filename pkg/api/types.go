@@ -29,6 +29,7 @@ type DownloadOptions struct {
 type DownloadJob struct {
 	ID           string          `json:"id"`                     // Unique identifier (e.g., UUID)
 	OriginalUrl  string          `json:"originalUrl"`            // Single URL for this job
+	Title        string          `json:"title,omitempty"`        // Human-readable title (e.g., "Artist - Album Name")
 	Options      DownloadOptions `json:"options"`                // Options for this specific job
 	Status       JobStatus       `json:"status"`                 // Current status of the job
 	ErrorMessage string          `json:"errorMessage,omitempty"` // Error message if status is Failed
@@ -39,6 +40,9 @@ type DownloadJob struct {
 	CurrentFile  string          `json:"currentFile,omitempty"`  // Name of the file currently being downloaded/processed
 	SpeedBPS     int64           `json:"speedBps"`               // Current download speed in Bytes per second
 	ArtworkURL   string          `json:"artworkUrl,omitempty"`   // URL for album/video artwork
+	// Track information
+	CurrentTrack int            `json:"currentTrack,omitempty"` // Current track number (1-based)
+	TotalTracks  int            `json:"totalTracks,omitempty"`  // Total number of tracks
 }
 
 // AddDownloadRequest is the expected request body for adding new download jobs.
@@ -65,6 +69,9 @@ type ProgressUpdate struct {
 	SpeedBPS        int64     `json:"speedBps"`              // Current speed in Bytes per second
 	BytesDownloaded int64     `json:"bytesDownloaded"`       // Bytes downloaded for the current file/segment
 	TotalBytes      int64     `json:"totalBytes"`            // Total bytes for the current file/segment (-1 if unknown)
+	// Track-based progress information
+	CurrentTrack    int       `json:"currentTrack,omitempty"` // Current track number (1-based)
+	TotalTracks     int       `json:"totalTracks,omitempty"`  // Total number of tracks
 }
 
 // --- SSE Event Structure ---
@@ -75,6 +82,7 @@ type SSEEventType string
 const (
 	SSEJobAdded       SSEEventType = "jobAdded"
 	SSEProgressUpdate SSEEventType = "progressUpdate"
+	SSEJobStatusUpdate SSEEventType = "jobStatusUpdate"
 	// Add other event types later if needed (e.g., jobRemoved)
 )
 

@@ -2,12 +2,17 @@ package main
 
 import (
 	// Needed for marshalling SSE data
+
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io" // Needed for SSE io.EOF check
 	"net/http"
 	"net/http/cookiejar" // Import cookiejar
-	"os"
+	"os"                 // For file path operations
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/gin-contrib/sse" // Import SSE
@@ -55,8 +60,8 @@ func main() {
 	sharedHttpClient = &http.Client{Jar: jar}
 	fmt.Println("HTTP Client initialized.")
 
-	// Create the progress channel
-	progressUpdates = make(chan api.ProgressUpdate, 100) // Keep using package name
+	// Create the progress channel with larger buffer for high-frequency downloads
+	progressUpdates = make(chan api.ProgressUpdate, 1000) // Keep using package name
 
 	// Initialize the Queue Manager FIRST
 	queueManager = queue.NewQueueManager()
@@ -74,14 +79,20 @@ func main() {
 	go func() {
 		fmt.Println("[Progress Consumer] Started...")
 		for update := range progressUpdates {
-			// Forward specific ProgressUpdate to the hub
+			fmt.Printf("[Progress Consumer] Received update: Job %s, Percentage: %.1f%%, Speed: %d B/s\n", 
+				update.JobID, update.Percentage, update.SpeedBPS)
+			
+			// Update the job progress in the queue manager
+			queueManager.UpdateJobProgress(update.JobID, update.Percentage, update.SpeedBPS, update.CurrentFile, update.CurrentTrack, update.TotalTracks)
+			
+			// Forward specific ProgressUpdate to the hub for SSE broadcasting
 			messageHub.BroadcastProgressUpdate(update) // Use specific method
 		}
 		fmt.Println("[Progress Consumer] Channel closed, exiting.")
 	}()
 
 	// Start the Background Worker
-	worker.StartWorker(queueManager, downloaderService)
+	worker.StartWorker(queueManager, downloaderService, messageHub)
 
 	router := gin.Default()
 
@@ -96,6 +107,10 @@ func main() {
 		apiGroup.GET("/downloads/:jobId", getDownloadJobHandler)    // New endpoint for specific job
 		apiGroup.DELETE("/downloads/:jobId", removeDownloadHandler) // Added DELETE route
 		apiGroup.GET("/status-stream", sseStatusHandler)            // SSE endpoint
+		// History endpoint
+		apiGroup.GET("/history", getHistoryHandler)                 // New endpoint for completed downloads
+		// File download endpoint
+		apiGroup.GET("/download/:jobId", downloadFileHandler)       // New endpoint to download completed files
 	}
 
 	// Simple health check endpoint
@@ -251,8 +266,8 @@ func getDownloadJobHandler(c *gin.Context) {
 
 // sseStatusHandler handles Server-Sent Event connections for real-time updates.
 func sseStatusHandler(c *gin.Context) {
-	// Create a channel for this specific client
-	clientChan := make(chan []byte)
+	// Create a channel for this specific client with large buffer for progress updates
+	clientChan := make(chan []byte, 500)
 
 	// Register the client with the hub
 	messageHub.RegisterClient(clientChan)
@@ -279,6 +294,7 @@ func sseStatusHandler(c *gin.Context) {
 			var sseEvent api.SSEEvent
 			if json.Unmarshal(msgBytes, &sseEvent) == nil {
 				// Successfully unmarshalled, use the Type field
+				fmt.Printf("[SSE Handler] Sending event: %s with data length: %d\n", sseEvent.Type, len(msgBytes))
 				// Still send the original msgBytes containing the wrapped data
 				sse.Encode(w, sse.Event{
 					Event: string(sseEvent.Type), // Use event type from struct
@@ -318,4 +334,202 @@ func removeDownloadHandler(c *gin.Context) {
 
 	// Return 204 No Content on successful removal
 	c.Status(http.StatusNoContent)
+}
+
+// getHistoryHandler handles GET /api/history requests (list completed downloads)
+func getHistoryHandler(c *gin.Context) {
+	// Retrieve completed jobs from the manager
+	completedJobs := queueManager.GetCompletedJobs()
+
+	// Return the list (might be empty)
+	c.JSON(http.StatusOK, completedJobs)
+}
+
+// downloadFileHandler handles GET /api/download/:jobId requests (download completed files)
+func downloadFileHandler(c *gin.Context) {
+	jobID := c.Param("jobId")
+
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Job ID is required"})
+		return
+	}
+
+	configMutex.RLock()
+	downloadPath := currentConfig.OutPath
+	configMutex.RUnlock()
+
+	var albumPath string
+	var sanitizedTitle string
+
+	// Try to get the job details from queue first
+	job, found := queueManager.GetJob(jobID)
+	if found && job.Status == api.StatusComplete {
+		// Use job title if available
+		sanitizedTitle = sanitizeForFilename(job.Title)
+		albumPath = filepath.Join(downloadPath, sanitizedTitle)
+	} else {
+		// Job not in queue (server restart), scan downloads directory for available albums
+		availableAlbums, err := findAvailableAlbums(downloadPath)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error scanning downloads directory: %v", err)})
+			return
+		}
+
+		if len(availableAlbums) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "No completed downloads found"})
+			return
+		}
+
+		// For now, use the first available album (in production, you might want to store job ID -> folder mapping)
+		// Or better yet, use a different endpoint that lists available downloads
+		sanitizedTitle = availableAlbums[0]
+		albumPath = filepath.Join(downloadPath, sanitizedTitle)
+		
+		// Log for debugging
+		fmt.Printf("[Download Handler] Job %s not in queue, using first available album: %s\n", jobID, sanitizedTitle)
+	}
+
+	// Check if the album directory exists
+	if _, err := os.Stat(albumPath); os.IsNotExist(err) {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "Downloaded files not found",
+			"detail": fmt.Sprintf("Expected folder: %s", albumPath),
+		})
+		return
+	}
+
+	// Find all audio files in the directory
+	audioFiles, err := findAudioFiles(albumPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error scanning download directory: %v", err)})
+		return
+	}
+
+	if len(audioFiles) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No audio files found in download directory"})
+		return
+	}
+
+	// Create a zip file in memory
+	zipBuffer, err := createZipArchive(audioFiles, albumPath, sanitizedTitle)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Error creating zip archive: %v", err)})
+		return
+	}
+
+	// Set headers for file download
+	filename := fmt.Sprintf("%s.zip", sanitizedTitle)
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	c.Header("Content-Length", fmt.Sprintf("%d", len(zipBuffer)))
+
+	// Serve the zip file
+	c.Data(http.StatusOK, "application/zip", zipBuffer)
+}
+
+// sanitizeForFilename removes or replaces characters that are invalid in filenames
+func sanitizeForFilename(filename string) string {
+	// Replace invalid characters with safe alternatives
+	invalid := []string{"<", ">", ":", "\"", "|", "?", "*", "/", "\\"}
+	result := filename
+	for _, char := range invalid {
+		result = strings.ReplaceAll(result, char, "_")
+	}
+	// Trim spaces and dots from the end
+	result = strings.TrimRight(result, " .")
+	return result
+}
+
+// findAvailableAlbums scans the downloads directory and returns album folder names
+func findAvailableAlbums(downloadsDir string) ([]string, error) {
+	var albums []string
+	
+	entries, err := os.ReadDir(downloadsDir)
+	if err != nil {
+		return nil, err
+	}
+	
+	for _, entry := range entries {
+		if entry.IsDir() {
+			// Check if this directory contains audio files
+			albumPath := filepath.Join(downloadsDir, entry.Name())
+			audioFiles, err := findAudioFiles(albumPath)
+			if err == nil && len(audioFiles) > 0 {
+				albums = append(albums, entry.Name())
+			}
+		}
+	}
+	
+	return albums, nil
+}
+
+// findAudioFiles recursively finds all audio files in a directory
+func findAudioFiles(dir string) ([]string, error) {
+	var audioFiles []string
+	audioExtensions := []string{".flac", ".mp3", ".aac", ".m4a", ".wav", ".alac"}
+
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if !info.IsDir() {
+			ext := strings.ToLower(filepath.Ext(path))
+			for _, validExt := range audioExtensions {
+				if ext == validExt {
+					audioFiles = append(audioFiles, path)
+					break
+				}
+			}
+		}
+		return nil
+	})
+
+	return audioFiles, err
+}
+
+// createZipArchive creates a zip archive containing all the specified files
+func createZipArchive(files []string, basePath, albumName string) ([]byte, error) {
+	// Create a buffer to write our archive to
+	buf := new(bytes.Buffer)
+	zipWriter := zip.NewWriter(buf)
+
+	for _, file := range files {
+		// Get relative path from the base album directory
+		relPath, err := filepath.Rel(basePath, file)
+		if err != nil {
+			relPath = filepath.Base(file) // Fallback to just the filename
+		}
+
+		// Create a zip file entry with album name as root folder
+		zipPath := filepath.Join(albumName, relPath)
+		zipFile, err := zipWriter.Create(zipPath)
+		if err != nil {
+			zipWriter.Close()
+			return nil, fmt.Errorf("failed to create zip entry for %s: %v", relPath, err)
+		}
+
+		// Open the source file
+		sourceFile, err := os.Open(file)
+		if err != nil {
+			zipWriter.Close()
+			return nil, fmt.Errorf("failed to open source file %s: %v", file, err)
+		}
+
+		// Copy file contents to zip
+		_, err = io.Copy(zipFile, sourceFile)
+		sourceFile.Close()
+		if err != nil {
+			zipWriter.Close()
+			return nil, fmt.Errorf("failed to copy file %s to zip: %v", file, err)
+		}
+	}
+
+	// Close the zip writer to finalize the archive
+	err := zipWriter.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed to close zip writer: %v", err)
+	}
+
+	return buf.Bytes(), nil
 }

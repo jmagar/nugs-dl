@@ -31,24 +31,39 @@ const (
 	configFileName = "config.json"
 )
 
+// getConfigPath returns the path to the config file, checking multiple locations
+func getConfigPath() string {
+	// Check if running in Docker (config directory exists)
+	if _, err := os.Stat("config"); err == nil {
+		dockerConfigPath := filepath.Join("config", configFileName)
+		if _, err := os.Stat(dockerConfigPath); err == nil {
+			return dockerConfigPath
+		}
+	}
+	
+	// Fallback to current directory
+	return configFileName
+}
+
 // LoadConfig reads the configuration file (config.json) and returns the AppConfig struct.
 // It applies default values for missing fields.
 func LoadConfig() (*AppConfig, error) {
 	cfg := &AppConfig{}
 
-	data, err := ioutil.ReadFile(configFileName)
+	configPath := getConfigPath()
+	data, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		// If the file doesn't exist, we might proceed with defaults or require it.
 		// For now, let's return an error if it's not found, similar to original behavior.
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%s not found", configFileName)
+			return nil, fmt.Errorf("%s not found", configPath)
 		}
-		return nil, fmt.Errorf("error reading %s: %w", configFileName, err)
+		return nil, fmt.Errorf("error reading %s: %w", configPath, err)
 	}
 
 	err = json.Unmarshal(data, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("error unmarshalling %s: %w", configFileName, err)
+		return nil, fmt.Errorf("error unmarshalling %s: %w", configPath, err)
 	}
 
 	// Apply defaults
@@ -98,9 +113,10 @@ func SaveConfig(cfg *AppConfig) error {
 		return fmt.Errorf("error marshalling config to JSON: %w", err)
 	}
 
-	err = ioutil.WriteFile(configFileName, data, 0644) // Use standard file permissions
+	configPath := getConfigPath()
+	err = ioutil.WriteFile(configPath, data, 0644) // Use standard file permissions
 	if err != nil {
-		return fmt.Errorf("error writing %s: %w", configFileName, err)
+		return fmt.Errorf("error writing %s: %w", configPath, err)
 	}
 
 	return nil

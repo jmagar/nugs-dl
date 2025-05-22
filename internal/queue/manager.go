@@ -78,6 +78,22 @@ func (qm *QueueManager) GetAllJobs() []*api.DownloadJob {
 	return jobsCopy
 }
 
+// GetCompletedJobs returns a slice containing only completed jobs.
+// Returns a copy of the slice to ensure thread safety.
+func (qm *QueueManager) GetCompletedJobs() []*api.DownloadJob {
+	qm.mutex.RLock()
+	defer qm.mutex.RUnlock()
+
+	// Initialize with empty slice to ensure JSON serializes as [] not null
+	completedJobs := make([]*api.DownloadJob, 0)
+	for _, job := range qm.jobs {
+		if job.Status == api.StatusComplete {
+			completedJobs = append(completedJobs, job)
+		}
+	}
+	return completedJobs
+}
+
 // UpdateJobStatus updates the status and optionally the error message of a job.
 // It also sets StartedAt and CompletedAt timestamps appropriately.
 func (qm *QueueManager) UpdateJobStatus(jobID string, status api.JobStatus, errMsg string) bool {
@@ -142,6 +158,49 @@ func (qm *QueueManager) UpdateJobArtwork(jobID string, artworkURL string) bool {
 		}
 	}
 	fmt.Printf("[QueueManager] Failed to update artwork for unknown job ID: %s\n", jobID)
+	return false
+}
+
+// UpdateJobTitle updates the title for a specific job.
+func (qm *QueueManager) UpdateJobTitle(jobID string, title string) bool {
+	qm.mutex.Lock()
+	defer qm.mutex.Unlock()
+
+	for _, job := range qm.jobs {
+		if job.ID == jobID {
+			job.Title = title
+			fmt.Printf("[QueueManager] Title updated for Job ID: %s -> %s\n", jobID, title)
+			return true
+		}
+	}
+	fmt.Printf("[QueueManager] Failed to update title for unknown job ID: %s\n", jobID)
+	return false
+}
+
+// UpdateJobProgress updates the progress, speed, current file, and track information for a specific job.
+func (qm *QueueManager) UpdateJobProgress(jobID string, progress float64, speedBps int64, currentFile string, currentTrack, totalTracks int) bool {
+	qm.mutex.Lock()
+	defer qm.mutex.Unlock()
+
+	for _, job := range qm.jobs {
+		if job.ID == jobID {
+			job.Progress = progress
+			job.SpeedBPS = speedBps
+			if currentFile != "" {
+				job.CurrentFile = currentFile
+			}
+			if currentTrack > 0 {
+				job.CurrentTrack = currentTrack
+			}
+			if totalTracks > 0 {
+				job.TotalTracks = totalTracks
+			}
+			fmt.Printf("[QueueManager] Progress updated for Job ID: %s -> %.1f%% (Track %d/%d, Speed: %d B/s)\n", 
+				jobID, progress, currentTrack, totalTracks, speedBps)
+			return true
+		}
+	}
+	fmt.Printf("[QueueManager] Failed to update progress for unknown job ID: %s\n", jobID)
 	return false
 }
 

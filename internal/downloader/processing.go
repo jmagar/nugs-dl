@@ -121,6 +121,9 @@ func (d *Downloader) downloadFile(jobID, filePath, downloadUrl string) error {
 	totalStr := "Unknown Size"
 	if totalBytes > 0 {
 		totalStr = humanize.Bytes(uint64(totalBytes))
+		fmt.Printf("Content-Length: %d bytes (%s)\n", totalBytes, totalStr)
+	} else {
+		fmt.Printf("Warning: No Content-Length header received, progress will be indeterminate\n")
 	}
 
 	// Initialize progress counter with JobID and channel
@@ -154,11 +157,17 @@ func (d *Downloader) downloadFile(jobID, filePath, downloadUrl string) error {
 // sendProgress is a helper to safely send updates on the progress channel.
 func (d *Downloader) sendProgress(update api.ProgressUpdate) {
 	if d.ProgressChan == nil {
+		fmt.Printf("[Downloader] Progress channel is nil for Job %s\n", update.JobID)
 		return // No channel configured
 	}
+	
+	fmt.Printf("[Downloader] Sending progress update: Job %s, Percentage: %.1f%%, Speed: %d B/s, Message: %s\n", 
+		update.JobID, update.Percentage, update.SpeedBPS, update.Message)
+	
 	// Use non-blocking send
 	select {
 	case d.ProgressChan <- update:
+		fmt.Printf("[Downloader] Progress update sent successfully for Job %s\n", update.JobID)
 	default:
 		fmt.Printf("[Downloader Warning] Progress channel full for Job %s, discarding update: %s\n", update.JobID, update.Message)
 	}
@@ -167,6 +176,8 @@ func (d *Downloader) sendProgress(update api.ProgressUpdate) {
 // processTrack handles fetching metadata, selecting quality, and downloading a single track.
 // (Refactored from processTrack in main.go)
 func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackTotal int, track *Track, streamParams *StreamParams) error {
+	// Calculate track-based progress percentage (completed tracks / total tracks * 100)
+	trackProgressPercentage := float64(trackNum-1) / float64(trackTotal) * 100.0
 	wantFmt := d.Config.Format // Get desired format from downloader config
 	var (
 		quals      []*Quality
@@ -238,7 +249,14 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 			return errors.New("could not find master playlist URL for HLS track")
 		}
 		// Before HLS download call:
-		d.sendProgress(api.ProgressUpdate{JobID: jobID, Message: fmt.Sprintf("Downloading HLS track %d/%d", trackNum, trackTotal), CurrentFile: trackFname})
+		d.sendProgress(api.ProgressUpdate{
+			JobID: jobID, 
+			Message: fmt.Sprintf("Downloading HLS track %d/%d", trackNum, trackTotal), 
+			CurrentFile: trackFname,
+			Percentage: trackProgressPercentage,
+			CurrentTrack: trackNum,
+			TotalTracks: trackTotal,
+		})
 		// Call the HLS download function
 		err = d.downloadHls(jobID, trackPath, masterPlaylistUrl)
 		// Whether HLS succeeds or fails, we return the result here.
@@ -266,7 +284,14 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 			chosenQual.Specs,
 		)
 		// Before download call:
-		d.sendProgress(api.ProgressUpdate{JobID: jobID, Message: fmt.Sprintf("Downloading track %d/%d", trackNum, trackTotal), CurrentFile: trackFname})
+		d.sendProgress(api.ProgressUpdate{
+			JobID: jobID, 
+			Message: fmt.Sprintf("Downloading track %d/%d", trackNum, trackTotal), 
+			CurrentFile: trackFname,
+			Percentage: trackProgressPercentage,
+			CurrentTrack: trackNum,
+			TotalTracks: trackTotal,
+		})
 		// Make download call pass jobID
 		err = d.downloadFile(jobID, trackPath, chosenQual.URL)
 
@@ -276,8 +301,16 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 		}
 
 		fmt.Printf("Successfully downloaded track %d: %s\n", trackNum, trackFname)
-		// After download call:
-		d.sendProgress(api.ProgressUpdate{JobID: jobID, Message: fmt.Sprintf("Finished track %d/%d", trackNum, trackTotal), CurrentFile: trackFname, Percentage: 100.0})
+		// After download call: calculate progress based on completed tracks
+		completedTrackProgress := float64(trackNum) / float64(trackTotal) * 100.0
+		d.sendProgress(api.ProgressUpdate{
+			JobID: jobID, 
+			Message: fmt.Sprintf("Finished track %d/%d", trackNum, trackTotal), 
+			CurrentFile: trackFname, 
+			Percentage: completedTrackProgress,
+			CurrentTrack: trackNum,
+			TotalTracks: trackTotal,
+		})
 		return nil // Explicitly return nil on non-HLS success
 	}
 	// Code below the if/else is now truly unreachable
@@ -374,6 +407,9 @@ func (d *Downloader) processAlbum(jobID string, albumID string, opts DownloadOpt
 	albumFolder := meta.ArtistName + " - " + strings.TrimRight(meta.ContainerInfo, " ")
 	fmt.Println("Album:", albumFolder)
 
+	// Update job title with the proper album information
+	d.QueueMgr.UpdateJobTitle(jobID, albumFolder)
+
 	// Sanitize and potentially shorten folder name (keep original logic?)
 	albumPath := filepath.Join(d.Config.OutPath, SanitizeFilename(albumFolder))
 	err = MakeDirs(albumPath) // TODO: Move MakeDirs to utils
@@ -407,6 +443,9 @@ func (d *Downloader) processArtist(jobID string, artistId string, opts DownloadO
 	fmt.Println("Artist:", containers[0].ArtistName) // Assuming first container has artist name
 	itemTotal := len(containers)
 	fmt.Printf("Found %d items for artist.\n", itemTotal)
+
+	// Update job title with the artist name
+	d.QueueMgr.UpdateJobTitle(jobID, containers[0].ArtistName)
 
 	var firstErr error // Variable to store the first error encountered
 
@@ -445,6 +484,9 @@ func (d *Downloader) processPlaylist(jobID string, plistId, legacyToken string, 
 
 	plistName := meta.Response.PlayListName
 	fmt.Println("Playlist:", plistName)
+
+	// Update job title with the playlist name
+	d.QueueMgr.UpdateJobTitle(jobID, plistName)
 
 	plistPath := filepath.Join(d.Config.OutPath, SanitizeFilename(plistName))
 	err = MakeDirs(plistPath) // TODO: Move MakeDirs to utils
