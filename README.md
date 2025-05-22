@@ -2,6 +2,9 @@
 
 A modern web application for downloading music and videos from nugs.net with real-time progress tracking and queue management.
 
+> **Built on the foundation of [Sorrow446/Nugs-Downloader](https://github.com/Sorrow446/Nugs-Downloader)**  
+> This web application extends the excellent CLI downloader created by [@Sorrow446](https://github.com/Sorrow446) with a modern React-based web interface, real-time progress tracking, and Docker deployment capabilities. All core download functionality is based on their original Go implementation.
+
 ![Web UI Dashboard](assets/Screenshot%202025-05-22%20182133.png)
 ![Download Queue](assets/Screenshot%202025-05-22%20182239.png)
 ![Settings Panel](assets/Screenshot%202025-05-22%20182116.png)
@@ -283,6 +286,20 @@ cat config/config.json
 - **Memory Usage:** Large downloads (500MB+) require adequate RAM for zip creation
 - **Disk Space:** Ensure sufficient space in download directory
 - **Network:** Stable internet connection required for streaming service access
+
+## Attribution
+
+This project is built upon the excellent work of [@Sorrow446](https://github.com/Sorrow446) and their [Nugs-Downloader](https://github.com/Sorrow446/Nugs-Downloader) CLI application. The core download logic, nugs.net API integration, and media processing functionality are all derived from their original implementation.
+
+**What we've added:**
+- Modern React-based web interface
+- Real-time progress tracking with Server-Sent Events
+- Docker containerization and production deployment
+- Queue management system
+- ZIP archive creation and download functionality
+- Track-based progress display
+
+Special thanks to the original contributors: [@Sorrow446](https://github.com/Sorrow446), [@twalker1998](https://github.com/twalker1998), [@marksibert](https://github.com/marksibert), and [@khord](https://github.com/khord).
 
 ## License & Disclaimer
 
