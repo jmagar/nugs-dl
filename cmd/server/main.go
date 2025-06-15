@@ -113,6 +113,27 @@ func main() {
 		apiGroup.GET("/download/:jobId", downloadFileHandler)       // New endpoint to download completed files
 	}
 
+	// Handle SPA routing and static files: for any route not matched by API,
+	// try to serve a static file. If not found, serve index.html for SPA.
+	// This should be one of the LAST routes defined.
+	router.NoRoute(func(c *gin.Context) {
+		// Attempt to serve static file
+		filePath := "./webui/dist" + c.Request.URL.Path
+		// Check if it's a directory, if so, try to serve index.html from it
+		if info, err := os.Stat(filePath); err == nil && info.IsDir() {
+			filePath = filepath.Join(filePath, "index.html")
+		}
+
+		// Check if the file exists
+		if _, err := os.Stat(filePath); err == nil {
+			c.File(filePath)
+			return
+		}
+
+		// Fallback to index.html for SPA routing
+		c.File("./webui/dist/index.html")
+	})
+
 	// Simple health check endpoint
 	router.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{

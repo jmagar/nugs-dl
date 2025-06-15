@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'; // React import removed, useCallback added
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -214,25 +214,8 @@ const HistoryManager = () => {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // Helper function to convert DownloadJob to HistoryItemProps
-  const convertJobToHistoryItem = (job: DownloadJob): HistoryItemProps => {
-    // Extract title from job title or URL
-    const title = job.title || extractTitleFromUrl(job.originalUrl)
-    
-    return {
-      id: job.id,
-      title: title,
-      type: 'album', // Default to album, could be enhanced based on URL analysis
-      url: job.originalUrl,
-      path: 'N/A', // Backend doesn't provide download path yet
-      date: job.completedAt ? new Date(job.completedAt).toLocaleDateString() : 'Unknown',
-      size: 'Unknown', // Backend doesn't provide file size yet
-      format: 'FLAC' // Default format
-    }
-  }
-
   // Extract title from URL (fallback for when job.title is not set)
-  const extractTitleFromUrl = (url: string): string => {
+  const extractTitleFromUrl = useCallback((url: string): string => {
     try {
       const urlObj = new URL(url)
       const pathParts = urlObj.pathname.split('/').filter(part => part.length > 0)
@@ -246,25 +229,43 @@ const HistoryManager = () => {
           const artistId = pathParts[pathParts.indexOf('artist') + 1]
           return `Artist ${artistId}`
         }
-        if (pathParts.includes('playlist') && pathParts.length >= 2) {
-          const playlistId = pathParts[pathParts.indexOf('playlist') + 1]
-          return `Playlist ${playlistId}`
-        }
+        // Add other nugs.net specific patterns if needed
       }
       
+      // Fallback if no specific pattern matches or not a nugs.net URL
       const lastPart = pathParts[pathParts.length - 1]
       if (lastPart && lastPart.length > 0) {
+        // If last part is numeric, assume it's an ID-like title part
         if (/^\d+$/.test(lastPart)) {
-          return `Download ${lastPart}`
+          return `Download ${lastPart}` 
         }
-        return lastPart.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+        // Otherwise, format it as a title
+        return lastPart.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       }
       
-      return 'Unknown Download'
-    } catch {
-      return 'Invalid URL'
+      return 'Unknown Title' // Ultimate fallback
+    } catch (e) {
+      console.warn(`Error parsing URL for title: ${url}`, e)
+      return 'Invalid URL' // Fallback for parsing errors
     }
-  }
+  }, [])
+
+  // Helper function to convert DownloadJob to HistoryItemProps
+  const convertJobToHistoryItem = useCallback((job: DownloadJob): HistoryItemProps => {
+    // Extract title from job title or URL
+    const title = job.title || extractTitleFromUrl(job.originalUrl)
+    
+    return {
+      id: job.id,
+      title: title,
+      type: 'album', // Default to album, could be enhanced based on URL analysis
+      url: job.originalUrl,
+      path: 'N/A', // Backend doesn't provide download path yet
+      date: job.completedAt ? new Date(job.completedAt).toLocaleDateString() : 'Unknown',
+      size: 'Unknown', // Backend doesn't provide file size yet
+      format: 'FLAC' // Default format
+    }
+  }, [extractTitleFromUrl])
   
   // Load history data
   useEffect(() => {
@@ -298,7 +299,7 @@ const HistoryManager = () => {
     }
 
     fetchHistory()
-  }, [])
+  }, [convertJobToHistoryItem])
   
   const handleRefresh = async () => {
     setIsLoading(true)

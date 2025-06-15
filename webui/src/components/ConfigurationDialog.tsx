@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'; // React import removed
 import {
   Dialog,
   DialogContent,
