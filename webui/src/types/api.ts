@@ -40,6 +40,13 @@ export interface DownloadJob {
   // Track information
   currentTrack?: number;
   totalTracks?: number;
+
+  // Fields apparently returned by /api/downloads/history but missing in type def
+  type?: 'album' | 'video' | 'livestream' | 'playlist'; // From HistoryItemProps
+  url?: string; // The primary URL of the downloaded item, distinct from originalUrl if processing changes it
+  path?: string; // Filesystem path where the item was saved
+  sizeFormatted?: string; // Human-readable size (e.g., "1.2 GB")
+  format?: string; // e.g., "FLAC", "MP4"
 }
 
 export interface AddDownloadRequest {

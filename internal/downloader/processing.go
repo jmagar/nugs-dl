@@ -1,17 +1,19 @@
 package downloader
 
 import (
+	"encoding/json" // Added for metadata logging
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
+	"strconv" // Added for int to string conversion
 	"strings"
 	"time"
 
 	"github.com/dustin/go-humanize"
+	"nugs-dl/internal/logger" // Import the logger package
 	// Corrected import if previously missed
 	"nugs-dl/pkg/api"
 	// TODO: Move utils like sanitise here or to utils.go
@@ -51,7 +53,7 @@ func getTrackQual(quals []*Quality, wantFmt int) *Quality {
 	// If exact not found, try fallback
 	fbFmt, hasFallback := trackFallback[wantFmt]
 	if hasFallback {
-		fmt.Printf("Format %d unavailable, falling back to %d...\n", wantFmt, fbFmt)
+		logger.Info("Track quality format unavailable, falling back", "wantedFormat", wantFmt, "fallbackFormat", fbFmt)
 		for _, quality := range quals {
 			if quality.Format == fbFmt {
 				return quality
@@ -61,7 +63,7 @@ func getTrackQual(quals []*Quality, wantFmt int) *Quality {
 
 	// If fallback also not found, maybe return the first available or highest quality?
 	if len(quals) > 0 {
-		fmt.Println("Fallback format also unavailable, selecting first available.")
+		logger.Info("Fallback track quality format also unavailable, selecting first available quality.", "selectedFormat", quals[0].Format)
 		return quals[0]
 	}
 
@@ -88,6 +90,7 @@ func checkIfHlsOnly(quals []*Quality) bool {
 func (d *Downloader) downloadFile(jobID, filePath, downloadUrl string) error {
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
+		logger.Error("Failed to create/open file for download", "path", filePath, "error", err)
 		return fmt.Errorf("failed to create/open file %s: %w", filePath, err)
 	}
 	defer f.Close()
@@ -101,6 +104,7 @@ func (d *Downloader) downloadFile(jobID, filePath, downloadUrl string) error {
 
 	req, err := http.NewRequest(http.MethodGet, downloadUrl, nil)
 	if err != nil {
+		logger.Error("Failed to create download HTTP request", "url", downloadUrl, "error", err)
 		return fmt.Errorf("failed to create download request for %s: %w", downloadUrl, err)
 	}
 	req.Header.Add("Referer", playerUrl)
@@ -109,11 +113,13 @@ func (d *Downloader) downloadFile(jobID, filePath, downloadUrl string) error {
 
 	do, err := d.HTTPClient.Do(req)
 	if err != nil {
+		logger.Error("HTTP request failed for download", "url", downloadUrl, "error", err)
 		return fmt.Errorf("failed to start download for %s: %w", downloadUrl, err)
 	}
 	defer do.Body.Close()
 
 	if do.StatusCode != http.StatusOK && do.StatusCode != http.StatusPartialContent {
+		logger.Error("Bad HTTP status code received for download", "url", downloadUrl, "statusCode", do.Status)
 		return fmt.Errorf("bad status code %s downloading %s", do.Status, downloadUrl)
 	}
 
@@ -121,9 +127,9 @@ func (d *Downloader) downloadFile(jobID, filePath, downloadUrl string) error {
 	totalStr := "Unknown Size"
 	if totalBytes > 0 {
 		totalStr = humanize.Bytes(uint64(totalBytes))
-		fmt.Printf("Content-Length: %d bytes (%s)\n", totalBytes, totalStr)
+		logger.Debug("Download content length received", "jobID", jobID, "bytes", totalBytes, "humanReadable", totalStr)
 	} else {
-		fmt.Printf("Warning: No Content-Length header received, progress will be indeterminate\n")
+		logger.Warn("No Content-Length header received, progress will be indeterminate", "jobID", jobID, "url", downloadUrl)
 	}
 
 	// Initialize progress counter with JobID and channel
@@ -139,6 +145,7 @@ func (d *Downloader) downloadFile(jobID, filePath, downloadUrl string) error {
 	_, err = io.Copy(f, io.TeeReader(do.Body, counter))
 	// fmt.Println("") // No longer needed as WriteCounter doesn't print newline
 	if err != nil {
+		logger.Error("Failed during file copy operation for download", "url", downloadUrl, "error", err, "jobID", jobID)
 		return fmt.Errorf("failed during copy for %s: %w", downloadUrl, err)
 	}
 
@@ -157,19 +164,25 @@ func (d *Downloader) downloadFile(jobID, filePath, downloadUrl string) error {
 // sendProgress is a helper to safely send updates on the progress channel.
 func (d *Downloader) sendProgress(update api.ProgressUpdate) {
 	if d.ProgressChan == nil {
-		fmt.Printf("[Downloader] Progress channel is nil for Job %s\n", update.JobID)
+		logger.Warn("[Downloader] Progress channel is nil, cannot send update", "jobID", update.JobID)
 		return // No channel configured
 	}
-	
-	fmt.Printf("[Downloader] Sending progress update: Job %s, Percentage: %.1f%%, Speed: %d B/s, Message: %s\n", 
-		update.JobID, update.Percentage, update.SpeedBPS, update.Message)
-	
+
+	logger.Debug("[Downloader] Sending progress update",
+		"jobID", update.JobID,
+		"percentage", update.Percentage,
+		"speedBPS", update.SpeedBPS,
+		"message", update.Message,
+		"currentFile", update.CurrentFile,
+		"currentTrack", update.CurrentTrack,
+		"totalTracks", update.TotalTracks)
+
 	// Use non-blocking send
 	select {
 	case d.ProgressChan <- update:
-		fmt.Printf("[Downloader] Progress update sent successfully for Job %s\n", update.JobID)
+		logger.Debug("[Downloader] Progress update sent successfully", "jobID", update.JobID)
 	default:
-		fmt.Printf("[Downloader Warning] Progress channel full for Job %s, discarding update: %s\n", update.JobID, update.Message)
+		logger.Warn("[Downloader] Progress channel full, discarding update", "jobID", update.JobID, "message", update.Message)
 	}
 }
 
@@ -190,8 +203,7 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 	for _, apiFmtId := range [4]int{1, 4, 7, 10} {
 		streamUrl, err := d.getStreamMeta(track.TrackID, 0, apiFmtId, streamParams)
 		if err != nil {
-			// Log non-fatal error, maybe only one format failed
-			fmt.Printf("Warning: failed to get stream metadata for track %d, format %d: %v\n", track.TrackID, apiFmtId, err)
+			logger.Warn("Failed to get stream metadata for track format", "trackID", track.TrackID, "formatAttempted", apiFmtId, "error", err, "jobID", jobID)
 			continue // Try next format
 		}
 		quality := queryQuality(streamUrl)
@@ -208,11 +220,12 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 				quals = append(quals, quality)
 			}
 		} else {
-			fmt.Printf("Warning: Unsupported quality format from URL: %s\n", streamUrl)
+			logger.Warn("Unsupported quality format from stream URL", "url", streamUrl, "jobID", jobID)
 		}
 	}
 
 	if len(quals) == 0 {
+		logger.Error("No valid stream URLs found for track", "trackID", track.TrackID, "songTitle", track.SongTitle, "jobID", jobID)
 		return errors.New("no valid stream URLs found for track")
 	}
 
@@ -226,6 +239,7 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 		// For non-HLS, we need chosenQual now to get the correct extension
 		chosenQual = getTrackQual(quals, wantFmt)
 		if chosenQual == nil {
+			logger.Error("Could not determine a suitable download quality/format for track", "trackID", track.TrackID, "songTitle", track.SongTitle, "wantedFormat", wantFmt, "jobID", jobID)
 			return errors.New("could not determine a suitable download quality/format")
 		}
 		initialExtension = chosenQual.Extension
@@ -236,7 +250,7 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 	trackPath := filepath.Join(folPath, trackFname)
 
 	if isHlsOnly {
-		fmt.Println("HLS-only track. Only AAC is available.")
+		logger.Info("Track is HLS-only. Only AAC is available.", "trackID", track.TrackID, "songTitle", track.SongTitle, "jobID", jobID)
 		// Need the *master* playlist URL to start the HLS process
 		masterPlaylistUrl := ""
 		for _, q := range quals {
@@ -246,6 +260,7 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 			}
 		}
 		if masterPlaylistUrl == "" {
+			logger.Error("Could not find master playlist URL for HLS track", "trackID", track.TrackID, "songTitle", track.SongTitle, "jobID", jobID)
 			return errors.New("could not find master playlist URL for HLS track")
 		}
 		// Before HLS download call:
@@ -265,24 +280,28 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 		// Non-HLS path
 		// chosenQual is already set from above
 		if chosenQual == nil { // Safety check
+			logger.Error("Internal error: chosenQual is nil in non-HLS path", "trackID", track.TrackID, "songTitle", track.SongTitle, "jobID", jobID)
 			return errors.New("internal error: chosenQual is nil in non-HLS path")
 		}
 
 		// --- Check Existence (for non-HLS) ---
 		exists, err := FileExists(trackPath) // Use utility function
 		if err != nil {
+			logger.Error("Failed to check if track exists", "path", trackPath, "error", err, "jobID", jobID)
 			return fmt.Errorf("failed to check if track exists %s: %w", trackPath, err)
 		}
 		if exists {
-			fmt.Printf("Track %d of %d already exists: %s\n", trackNum, trackTotal, trackFname)
+			logger.Info("Track already exists, skipping download", "trackNumber", trackNum, "totalTracks", trackTotal, "filename", trackFname, "jobID", jobID)
 			return nil // Skip download
 		}
 
 		// --- Download (for non-HLS) ---
-		fmt.Printf(
-			"Downloading track %d of %d: %s - %s\n", trackNum, trackTotal, track.SongTitle,
-			chosenQual.Specs,
-		)
+		logger.Info("Downloading track",
+			"trackNumber", trackNum,
+			"totalTracks", trackTotal,
+			"songTitle", track.SongTitle,
+			"qualitySpecs", chosenQual.Specs,
+			"jobID", jobID)
 		// Before download call:
 		d.sendProgress(api.ProgressUpdate{
 			JobID: jobID, 
@@ -296,11 +315,12 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 		err = d.downloadFile(jobID, trackPath, chosenQual.URL)
 
 		if err != nil {
+			logger.Error("Download failed for track, removing partial file", "filename", trackFname, "error", err, "jobID", jobID)
 			os.Remove(trackPath)
 			return fmt.Errorf("download failed for track %s: %w", trackFname, err)
 		}
 
-		fmt.Printf("Successfully downloaded track %d: %s\n", trackNum, trackFname)
+		logger.Info("Successfully downloaded track", "trackNumber", trackNum, "filename", trackFname, "jobID", jobID)
 		// After download call: calculate progress based on completed tracks
 		completedTrackProgress := float64(trackNum) / float64(trackTotal) * 100.0
 		d.sendProgress(api.ProgressUpdate{
@@ -320,14 +340,68 @@ func (d *Downloader) processTrack(jobID string, folPath string, trackNum, trackT
 
 // getVideoSku finds the SKU ID for video products.
 // (Moved from main.go)
-func getVideoSku(products []Product) int {
-	for _, product := range products {
-		formatStr := product.FormatStr
-		if formatStr == "VIDEO ON DEMAND" || formatStr == "LIVE HD VIDEO" {
-			return product.SkuID
-		}
-	}
-	return 0
+func getVideoSkuID(meta *AlbArtResp, preferredFormatID int, jobID string) int {
+    logger.Info("[getVideoSkuID] Entry",
+        "jobID", jobID,
+        "meta_is_nil", meta == nil,
+        "preferredFormatID", preferredFormatID)
+    if meta == nil {
+        logger.Info("[getVideoSkuID] Meta is nil, returning 0", "jobID", jobID)
+        return 0
+    }
+
+    // Check ProductFormatList first (common for livestreams/VODs with specific formats)
+    if meta.ProductFormatList != nil && len(meta.ProductFormatList) > 0 {
+        logger.Info("[getVideoSkuID] Checking meta.ProductFormatList", "jobID", jobID, "numProductFormats", len(meta.ProductFormatList))
+        // Try to find the exact preferred format
+        for _, pf := range meta.ProductFormatList {
+            logger.Info("[getVideoSkuID] Checking productFormatList item", "jobID", jobID, "pfType", pf.PfType, "formatStr", pf.FormatStr, "skuID", pf.SkuID) // Use PfType and FormatStr
+            // Log IsSubStreamOnly, ensure your ProductFormatListItem struct has this field
+            logger.Info("[getVideoSkuID] Checking productFormatList item", "jobID", jobID, "pfType", pf.PfType, "formatStr", pf.FormatStr, "skuID", pf.SkuID, "isSubStreamOnly", pf.IsSubStreamOnly)
+            if pf.IsSubStreamOnly == 1 {
+                logger.Info("[getVideoSkuID] Skipping stream-only SKU in ProductFormatList by preferredFormatID check", "jobID", jobID, "skuID", pf.SkuID)
+                continue
+            }
+            if pf.PfType == preferredFormatID && pf.SkuID != 0 {
+                logger.Info("[getVideoSkuID] Found video SKU in ProductFormatList by preferredFormatID", "jobID", jobID, "skuID", pf.SkuID, "pfType", pf.PfType)
+                return pf.SkuID
+            }
+        }
+        // If preferred format not found, take the first available *video* format from ProductFormatList
+        for _, pf := range meta.ProductFormatList {
+            // Log IsSubStreamOnly again for the fallback loop
+            logger.Info("[getVideoSkuID] Checking productFormatList item (fallback)", "jobID", jobID, "pfType", pf.PfType, "formatStr", pf.FormatStr, "skuID", pf.SkuID, "isSubStreamOnly", pf.IsSubStreamOnly)
+            if pf.IsSubStreamOnly == 1 {
+                logger.Info("[getVideoSkuID] Skipping stream-only SKU in ProductFormatList (fallback)", "jobID", jobID, "skuID", pf.SkuID)
+                continue
+            }
+            if pf.SkuID != 0 && strings.Contains(strings.ToLower(pf.FormatStr), "video") {
+                 logger.Info("[getVideoSkuID] Found first available video SKU in ProductFormatList (fallback)", "jobID", jobID, "skuID", pf.SkuID, "formatStr", pf.FormatStr)
+                 return pf.SkuID
+            }
+        }
+        logger.Info("[getVideoSkuID] No suitable (non-stream-only) video SKU found in ProductFormatList", "jobID", jobID)
+    }
+
+    // Fallback to checking Products array (common for older catalog items or general releases)
+    if meta.Products != nil && len(meta.Products) > 0 {
+        logger.Info("[getVideoSkuID] Checking meta.Products for video SKU", "jobID", jobID, "numProducts", len(meta.Products))
+        for _, p := range meta.Products {
+            isLiveHD := strings.Contains(strings.ToUpper(p.FormatStr), "LIVE HD VIDEO")
+            isMP4 := strings.Contains(strings.ToUpper(p.FormatStr), "MP4")
+            isVideoOnDemand := strings.Contains(strings.ToUpper(p.FormatStr), "VIDEO ON DEMAND")
+            logger.Info("[getVideoSkuID] Checking product item from meta.Products", "jobID", jobID, "formatStr", p.FormatStr, "skuID", p.SkuID, "isLiveHD", isLiveHD, "isMP4", isMP4, "isVideoOnDemand", isVideoOnDemand)
+
+            if p.SkuID != 0 && (isLiveHD || isMP4 || isVideoOnDemand) {
+                logger.Info("[getVideoSkuID] Found video SKU in Products array (fallback)", "jobID", jobID, "skuID", p.SkuID, "formatStr", p.FormatStr)
+                return p.SkuID
+            }
+        }
+        logger.Info("[getVideoSkuID] No suitable video SKU found in Products array", "jobID", jobID)
+    }
+
+    logger.Info("[getVideoSkuID] No video SKU found after checking all sources, returning 0", "jobID", jobID)
+    return 0
 }
 
 // getLstreamSku finds the SKU ID for livestream video products.
@@ -350,6 +424,18 @@ func (d *Downloader) processAlbum(jobID string, albumID string, opts DownloadOpt
 		err    error
 	)
 
+	logger.Debug("[processAlbum] Entry",
+		"jobID", jobID,
+		"albumID", albumID, // This is the containerID for livestreams
+		"opts.ForceVideo", opts.ForceVideo,
+		"opts.SkipVideos", opts.SkipVideos,
+		"config.ForceVideo", d.Config.ForceVideo,
+		"config.SkipVideos", d.Config.SkipVideos,
+		"config.VideoFormat", d.Config.VideoFormat,
+		"config.AudioFormat", d.Config.Format,
+		"config.LiveVideoPath", d.Config.LiveVideoPath,
+	)
+
 	if preloadedMeta != nil {
 		// Use metadata preloaded by artist call
 		meta = preloadedMeta
@@ -357,12 +443,40 @@ func (d *Downloader) processAlbum(jobID string, albumID string, opts DownloadOpt
 		// Fetch metadata directly if album ID is provided
 		albumMeta, err := d.getAlbumMeta(albumID)
 		if err != nil {
+			logger.Error("Failed to get metadata for album", "albumID", albumID, "error", err, "jobID", jobID)
 			return fmt.Errorf("failed to get metadata for album %s: %w", albumID, err)
 		}
 		if albumMeta.Response == nil {
+			logger.Error("API returned empty response for album metadata", "albumID", albumID, "jobID", jobID)
 			return fmt.Errorf("API returned empty response for album %s", albumID)
 		}
 		meta = albumMeta.Response
+	}
+
+	if meta != nil {
+		metaJSON, err := json.MarshalIndent(meta, "", "  ")
+		if err != nil {
+			logger.Warn("[processAlbum] Failed to marshal metadata to JSON for logging", "jobID", jobID, "albumID", albumID, "error", err)
+		} else {
+			logger.Debug("[processAlbum] Fetched/Preloaded Metadata", "jobID", jobID, "albumID", albumID, "metadata", string(metaJSON))
+		}
+	} else {
+		logger.Warn("[processAlbum] Metadata (meta) is nil after fetching/preloading", "jobID", jobID, "albumID", albumID)
+	}
+
+	// Update Job with ContainerID if available
+	var currentJobContainerID string
+	if meta != nil && meta.ContainerID != 0 {
+		currentJobContainerID = strconv.Itoa(meta.ContainerID)
+		d.QueueMgr.UpdateJobContainerID(jobID, currentJobContainerID)
+
+		// Check if this content has already been downloaded successfully
+		if completed, originalJobID := d.QueueMgr.HasCompletedJobWithContainerID(currentJobContainerID); completed {
+			errMsg := fmt.Sprintf("Content with ContainerID '%s' already downloaded in JobID '%s'", currentJobContainerID, originalJobID)
+			logger.Info("[Downloader-processAlbum] Duplicate completed content detected", "jobID", jobID, "containerID", currentJobContainerID, "originalJobID", originalJobID)
+			// Return a wrapped ErrDuplicateCompleted to allow type checking by the caller (worker)
+			return fmt.Errorf("%w: %s", ErrDuplicateCompleted, errMsg)
+		}
 	}
 
 	// Extract and update artwork URL
@@ -380,25 +494,44 @@ func (d *Downloader) processAlbum(jobID string, albumID string, opts DownloadOpt
 	trackTotal := len(tracks)
 
 	// Check for video
-	skuID := getVideoSku(meta.Products)
+	skuID := getVideoSkuID(meta, d.Config.VideoFormat, jobID) // Use 'meta' which is *AlbArtResp
 
 	if skuID == 0 && trackTotal < 1 {
+		logger.Error("Release has no tracks or videos", "albumID", albumID, "jobID", jobID)
 		return fmt.Errorf("release %s has no tracks or videos", albumID)
 	}
 
 	// --- Decide whether to download video or tracks ---
-	if skuID != 0 { // Video exists
+	logger.Info("[processAlbum] Checking video conditions",
+		"jobID", jobID,
+		"albumID", albumID,
+		"opts.ForceVideo", opts.ForceVideo,
+		"d.Config.ForceVideo", d.Config.ForceVideo,
+		"opts.SkipVideos", opts.SkipVideos,
+		"d.Config.SkipVideos", d.Config.SkipVideos,
+		"meta.ContainerTypeStr", meta.ContainerTypeStr,
+	)
+
+    videoSkuID := getVideoSkuID(meta, d.Config.VideoFormat, jobID) // Use 'meta' which is *AlbArtResp
+    logger.Info("[processAlbum] getVideoSkuID result", "jobID", jobID, "albumID", albumID, "videoSkuID", videoSkuID)
+    logger.Info("[processAlbum] After getVideoSkuID call", "jobID", jobID, "albumID", albumID, "returnedVideoSkuID", videoSkuID)
+
+	if videoSkuID != 0 { // Video exists, use videoSkuID from our comprehensive check
 		if opts.SkipVideos {
-			fmt.Printf("Skipping video for album/show ID %s\n", albumID)
-			// If it's ONLY video, we skip entirely. If tracks also exist, continue to tracks.
+			logger.Info("Skipping video for album/show due to options", "albumID", albumID, "jobID", jobID)
+		} else if !opts.ForceVideo && !d.Config.ForceVideo && meta.ContainerTypeStr != "Video" && meta.ContainerTypeStr != "Bundle" && meta.ContainerTypeStr != "Show" { 
 			if trackTotal < 1 {
 				return nil
 			}
-		} else if opts.ForceVideo || trackTotal < 1 {
-			fmt.Printf("Processing video for album/show ID %s\n", albumID)
-			// TODO: Call refactored video processing function
+		} else if opts.ForceVideo || d.Config.ForceVideo || trackTotal < 1 {
+			logger.Info("Processing video for album/show", "albumID", albumID, "jobID", jobID, "forceVideo", opts.ForceVideo, "trackTotal", trackTotal)
 			err = d.processVideo(jobID, albumID, "", opts, streamParams, meta, false)
-			return errors.New("video download not yet implemented in refactor") // Temp error
+			if err != nil {
+				logger.Error("Video processing failed", "albumID", albumID, "error", err, "jobID", jobID)
+				return err
+			}
+			logger.Info("Video processing completed successfully", "albumID", albumID, "jobID", jobID)
+			return nil // Return success after video processing
 		}
 		// If video exists but not forced and tracks exist, fall through to download tracks
 	}
@@ -418,6 +551,12 @@ func (d *Downloader) processAlbum(jobID string, albumID string, opts DownloadOpt
 	}
 
 	for i, track := range tracks {
+		logger.Debug("[processAlbum] Processing audio track from album",
+			"jobID", jobID,
+			"albumID", albumID,
+			"trackIndex", i,
+			"trackID", track.TrackID,
+			"songTitle", track.SongTitle)
 		trackNum := i + 1
 		err := d.processTrack(jobID, albumPath, trackNum, trackTotal, &track, streamParams)
 		if err != nil {

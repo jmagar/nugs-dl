@@ -1,6 +1,7 @@
 package downloader
 
 import (
+	"strconv"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"nugs-dl/internal/logger" // Import the logger package
 	"nugs-dl/pkg/api"
 
 	"github.com/grafov/m3u8"
@@ -82,12 +84,12 @@ func (d *Downloader) chooseVariant(manifestUrl, wantRes string) (*m3u8.Variant, 
 			parts := strings.SplitN(bestVariant.Resolution, "x", 2)
 			if len(parts) == 2 {
 				actualRes := parts[1]
-				fmt.Printf("Highest available resolution is %sp\n", actualRes)
+				logger.Info("Highest available video resolution determined from manifest", "resolution", actualRes+"p", "variantURI", bestVariant.URI)
 				return bestVariant, formatRes(actualRes), nil
 			}
 		}
 		// Fallback if resolution couldn't be parsed from best variant
-		fmt.Println("Could not determine resolution from highest bandwidth variant, falling back to default selection.")
+		logger.Warn("Could not determine resolution from highest bandwidth variant, falling back to default selection logic.", "variantURI", bestVariant.URI)
 		// Continue to normal selection logic below
 	}
 
@@ -103,13 +105,13 @@ func (d *Downloader) chooseVariant(manifestUrl, wantRes string) (*m3u8.Variant, 
 		if !hasFallback {
 			break // No more fallbacks to try
 		}
-		fmt.Printf("Resolution %s unavailable, falling back to %s...\n", formatRes(currentTryRes), formatRes(fbRes))
+		logger.Info("Desired video resolution unavailable, falling back", "wanted", formatRes(currentTryRes), "fallbackTo", formatRes(fbRes))
 		currentTryRes = fbRes
 	}
 
 	if wantVariant == nil {
 		// If no desired or fallback resolution found, maybe pick the best available?
-		fmt.Println("Desired/fallback resolutions not found, selecting highest available variant.")
+		logger.Info("Desired/fallback video resolutions not found, selecting highest available variant by bandwidth.", "selectedVariantURI", master.Variants[0].URI)
 		wantVariant = master.Variants[0]
 		parts := strings.SplitN(wantVariant.Resolution, "x", 2)
 		if len(parts) == 2 {
@@ -121,7 +123,7 @@ func (d *Downloader) chooseVariant(manifestUrl, wantRes string) (*m3u8.Variant, 
 
 	finalResStr := formatRes(currentTryRes)
 	if currentTryRes != origWantRes && origWantRes != "2160" { // Don't print if 'best' was requested
-		fmt.Printf("Downloading video in %s instead.\n", finalResStr)
+		logger.Info("Selected video resolution differs from original request due to availability/fallback", "originalWanted", formatRes(origWantRes), "selected", finalResStr)
 	}
 
 	return wantVariant, finalResStr, nil
@@ -140,7 +142,7 @@ func (d *Downloader) downloadVideoSegments(jobID, videoPath, baseUrl string, seg
 	if segTotal == 0 {
 		return errors.New("no video segments found to download")
 	}
-	fmt.Printf("Downloading %d video segments...\n", segTotal)
+	logger.Info("Starting download of video segments", "jobID", jobID, "totalSegments", segTotal, "targetFile", filepath.Base(videoPath))
 	// Send initial progress update
 	d.sendProgress(api.ProgressUpdate{
 		JobID:       jobID,
@@ -161,21 +163,21 @@ func (d *Downloader) downloadVideoSegments(jobID, videoPath, baseUrl string, seg
 		segUrl := baseUrl + segRelUrl // Construct full segment URL
 		req, err := http.NewRequest(http.MethodGet, segUrl, nil)
 		if err != nil {
-			fmt.Printf("\nError creating request for segment %d (%s): %v\n", segNum, segUrl, err)
+			logger.Error("Error creating request for video segment", "jobID", jobID, "segmentNumber", segNum, "segmentURL", segUrl, "error", err)
 			continue // Skip segment on error?
 		}
 		req.Header.Add("User-Agent", userAgent)
 
 		do, err := d.HTTPClient.Do(req)
 		if err != nil {
-			fmt.Printf("\nError downloading segment %d (%s): %v\n", segNum, segUrl, err)
+			logger.Error("Error downloading video segment", "jobID", jobID, "segmentNumber", segNum, "segmentURL", segUrl, "error", err)
 			continue // Skip segment on error?
 		}
 
 		if do.StatusCode != http.StatusOK {
 			status := do.Status
 			do.Body.Close()
-			fmt.Printf("\nBad status for segment %d (%s): %s\n", segNum, segUrl, status)
+			logger.Error("Bad status for video segment download", "jobID", jobID, "segmentNumber", segNum, "segmentURL", segUrl, "status", status)
 			continue // Skip segment on error?
 		}
 
@@ -183,7 +185,7 @@ func (d *Downloader) downloadVideoSegments(jobID, videoPath, baseUrl string, seg
 		n, err := io.Copy(f, do.Body)
 		do.Body.Close()
 		if err != nil {
-			fmt.Printf("\nError writing segment %d (%s) to file: %v\n", segNum, segUrl, err)
+			logger.Error("Error writing video segment to file", "jobID", jobID, "segmentNumber", segNum, "segmentURL", segUrl, "targetFile", videoPath, "error", err)
 			// Potentially stop entire download here? For now, continue.
 		} else {
 			totalBytesDownloaded += n
@@ -209,10 +211,10 @@ func (d *Downloader) downloadVideoSegments(jobID, videoPath, baseUrl string, seg
 				CurrentFile:     filepath.Base(videoPath),
 			})
 		}
-		// Print simple progress to console as fallback
-		fmt.Printf("\rSegment %d of %d...", segNum, segTotal)
+		// Log detailed segment progress at Debug level
+		logger.Debug("Video segment download progress", "jobID", jobID, "segmentNumber", segNum, "totalSegments", segTotal, "bytesDownloadedThisSegment", n)
 	}
-	fmt.Println("\nFinished downloading segments.")
+	logger.Info("Finished downloading all video segments.", "jobID", jobID, "totalSegments", segTotal, "totalBytes", totalBytesDownloaded, "targetFile", filepath.Base(videoPath))
 	// Send final 100% update
 	d.sendProgress(api.ProgressUpdate{
 		JobID:           jobID,
@@ -228,6 +230,32 @@ func (d *Downloader) downloadVideoSegments(jobID, videoPath, baseUrl string, seg
 // processVideo handles the entire video download and processing workflow.
 // (Refactored from video in main.go)
 func (d *Downloader) processVideo(jobID, videoID, uguID string, opts DownloadOptions, streamParams *StreamParams, preloadedMeta *AlbArtResp, isLstream bool) error {
+	preloadedMetaIsNil := preloadedMeta == nil
+	logger.Info("[processVideo] Entered processVideo function", "jobID", jobID, "videoID", videoID, "isLstream", isLstream, "preloadedMeta_is_nil", preloadedMetaIsNil)
+	logger.Debug("[processVideo] Entry",
+		"jobID", jobID,
+		"videoID", videoID, // This is the containerID for videos/livestreams
+		"uguID", uguID,
+		"opts.ForceVideo", opts.ForceVideo,
+		"opts.SkipVideos", opts.SkipVideos,
+		"opts.SkipChapters", opts.SkipChapters,
+		"isLstream", isLstream,
+		"config.VideoFormat", d.Config.VideoFormat,
+		"config.LiveVideoPath", d.Config.LiveVideoPath,
+		"preloadedMeta_IsNil", preloadedMeta == nil,
+		"preloadedMeta.ContainerInfo", func() string {
+			if preloadedMeta == nil {
+				return "N/A"
+			}
+			return preloadedMeta.ContainerInfo
+		}(),
+		"preloadedMeta.ArtistName", func() string {
+			if preloadedMeta == nil {
+				return "N/A"
+			}
+			return preloadedMeta.ArtistName
+		}(),
+	)
 	var (
 		meta *AlbArtResp
 		err  error
@@ -266,7 +294,7 @@ func (d *Downloader) processVideo(jobID, videoID, uguID string, opts DownloadOpt
 	if isLstream {
 		skuID = getLstreamSku(meta.ProductFormatList)
 	} else {
-		skuID = getVideoSku(meta.Products)
+		skuID = getVideoSkuID(meta, d.Config.VideoFormat, jobID) // Corrected function call
 	}
 	if skuID == 0 {
 		return errors.New("no suitable video product SKU found in metadata")
@@ -290,15 +318,38 @@ func (d *Downloader) processVideo(jobID, videoID, uguID string, opts DownloadOpt
 	if err != nil {
 		return fmt.Errorf("failed to choose video variant: %w", err)
 	}
+	logger.Debug("[processVideo] Chosen Video Variant",
+		"jobID", jobID,
+		"videoID", videoID,
+		"chosenResStr", chosenResStr,
+		"variant.URI", func() string { if variant == nil { return "N/A" }; return variant.URI }(),
+		"variant.Resolution", func() string { if variant == nil { return "N/A" }; return variant.Resolution }(),
+		"variant.Bandwidth", func() uint32 { if variant == nil { return 0 }; return variant.Bandwidth }(),
+		"variant.AverageBandwidth", func() uint32 { if variant == nil { return 0 }; return variant.AverageBandwidth }(),
+		"variant.ProgramID", func() string { if variant == nil { return "N/A" }; return strconv.FormatUint(uint64(variant.ProgramId), 10) }(),
+		"variant.Codecs", func() string { if variant == nil { return "N/A" }; return variant.Codecs }(),
+	)
 
 	// --- Prepare Filename and Check Existence ---
-	videoFnameBase := meta.ArtistName + " - " + strings.TrimRight(meta.ContainerInfo, " ")
-	fmt.Println("Video:", videoFnameBase)
+	videoFnameBase := strings.TrimRight(meta.ContainerInfo, " ")
+	logger.Info("Processing video", "jobID", jobID, "videoTitle", videoFnameBase, "videoID", videoID)
 
 	// Update job title with the video information
 	d.QueueMgr.UpdateJobTitle(jobID, videoFnameBase)
 
-	vidPathNoExt := filepath.Join(d.Config.OutPath, SanitizeFilename(videoFnameBase+"_"+chosenResStr))
+	// Determine the base path for the video download
+	videoBasePath := d.Config.OutPath // Default to the main output path
+	if d.Config.LiveVideoPath != "" {
+		videoBasePath = d.Config.LiveVideoPath // Use the specific path if provided
+	}
+
+	// Create artist-specific directory
+	artistPath := filepath.Join(videoBasePath, SanitizeFilename(meta.ArtistName))
+	if err := os.MkdirAll(artistPath, 0755); err != nil {
+		return fmt.Errorf("failed to create artist directory for video %s: %w", artistPath, err)
+	}
+
+	vidPathNoExt := filepath.Join(artistPath, SanitizeFilename(videoFnameBase+"_"+chosenResStr))
 	vidPathTs := vidPathNoExt + ".ts"   // Path for raw downloaded segments
 	vidPathMp4 := vidPathNoExt + ".mp4" // Final output path
 
@@ -307,7 +358,7 @@ func (d *Downloader) processVideo(jobID, videoID, uguID string, opts DownloadOpt
 		return fmt.Errorf("failed to check if video exists %s: %w", vidPathMp4, err)
 	}
 	if exists {
-		fmt.Println("Video already exists locally.")
+		logger.Info("Video already exists locally, skipping download.", "jobID", jobID, "path", vidPathMp4)
 		return nil
 	}
 
@@ -336,23 +387,30 @@ func (d *Downloader) processVideo(jobID, videoID, uguID string, opts DownloadOpt
 
 	// --- Process Chapters (if available) ---
 	if chapsAvail {
-		fmt.Println("Processing chapters...")
+		logger.Info("Processing video chapters...", "jobID", jobID)
 		durationSecs, err := d.getDuration(vidPathTs) // Use method on d
 		if err != nil {
-			fmt.Printf("Warning: Failed to get video duration for chapters: %v\n", err)
+			logger.Warn("Failed to get video duration for chapters, chapters will be skipped.", "jobID", jobID, "videoFile", vidPathTs, "error", err)
 			chapsAvail = false
 		} else {
 			// writeChapsFile doesn't need the Downloader receiver
 			err = writeChapsFile(meta.VideoChapters, durationSecs)
 			if err != nil {
-				fmt.Printf("Warning: Failed to write chapter file: %v\n", err)
+				logger.Warn("Failed to write chapter file, chapters will be skipped.", "jobID", jobID, "error", err)
 				chapsAvail = false
 			}
 		}
 	}
 
 	// --- Remux TS to MP4 using FFmpeg ---
-	fmt.Println("Remuxing video to MP4...")
+	logger.Debug("[processVideo] Preparing for FFmpeg remux",
+		"jobID", jobID,
+		"videoID", videoID,
+		"sourceTSFile", vidPathTs,
+		"targetMP4File", vidPathMp4,
+		"chaptersAvailableAndUsed", chapsAvail,
+	)
+	logger.Info("Remuxing video to MP4...", "jobID", jobID, "sourceTS", vidPathTs, "targetMP4", vidPathMp4)
 	// Call tsToMp4 method on d
 	err = d.tsToMp4(vidPathTs, vidPathMp4, chapsAvail)
 	if err != nil {
@@ -361,6 +419,6 @@ func (d *Downloader) processVideo(jobID, videoID, uguID string, opts DownloadOpt
 	}
 
 	// tsToMp4 handles cleanup on success
-	fmt.Println("Video processed successfully:", vidPathMp4)
+	logger.Info("Video processed successfully", "jobID", jobID, "finalPath", vidPathMp4)
 	return nil // Return nil on success
 }

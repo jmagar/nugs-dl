@@ -16,6 +16,7 @@ import (
 	// Use correct module path
 	appConfig "nugs-dl/internal/config"
 	// downloader "nugs-dl/internal/downloader" // Keep commented for now
+	"nugs-dl/internal/logger" // Import the logger package
 )
 
 // Keep constants only used by main CLI logic
@@ -82,11 +83,11 @@ var (
 
 // handleErr can potentially be moved to a shared utils package
 func handleErr(errText string, err error, _panic bool) {
-	errString := errText + "\n" + err.Error()
 	if _panic {
-		panic(errString)
+		logger.Error(errText, "error", err) // Log before panic
+		panic(fmt.Sprintf("%s: %v", errText, err)) // Panic with a formatted string
 	}
-	fmt.Println(errString)
+	logger.Error(errText, "error", err)
 }
 
 // wasRunFromSrc, getScriptDir are CLI specific, keep here.
@@ -234,7 +235,7 @@ func loadCliConfig() (*CliConfig, error) {
 	// Process URLs specific to CLI input
 	processedUrls, err := processUrls(args.Urls)
 	if err != nil {
-		fmt.Println("Failed to process URLs.")
+		logger.Error("Failed to process URLs.", "error", err)
 		return nil, err
 	}
 
@@ -299,7 +300,7 @@ func parseArgs() *Args {
 
 // init() remains here for CLI specific init if needed
 func init() {
-	fmt.Println(`
+	logger.Info(`
  _____                ____                _           _         
 |   | |_ _ ___ ___   |    \ ___ _ _ _ ___| |___ ___ _| |___ ___ 
 | | | | | | . |_ -|  |  |  | . | | | |   | | . | .'| . | -_|  _|
@@ -310,14 +311,14 @@ func init() {
 
 // main() is the CLI entrypoint, it needs significant changes
 func main() {
-	fmt.Println("\nNugs Downloader v1.0\n")
+	logger.Info("Nugs Downloader v1.0")
 	// Replace parseCfg with new loader
 	cliCfg, err := loadCliConfig() // Renamed var to cliCfg to avoid shadowing
 	if err != nil {
 		handleErr("Config/args error:", err, true)
 	}
 
-	fmt.Printf("CLI Config loaded: %+v\n", cliCfg)
+	logger.Debug("CLI Config loaded", "config", cliCfg)
 
 	// --- This section needs complete replacement ---
 	// It should instantiate the downloader and call its methods
@@ -342,6 +343,20 @@ func main() {
 		// Ensure OutPath uses the potentially overridden one from CLI args
 		appCfg.OutPath = cliCfg.OutPath
 		appCfg.UseFfmpegEnvVar = cliCfg.UseFfmpegEnvVar
+		// LogLevel and LogDir will be from the loaded appCfg
+	}
+
+	// Initialize the logger for the CLI
+	// Ensure LogLevel and LogDir have default values if appCfg was initially nil
+	if appCfg.LogLevel == "" {
+		appCfg.LogLevel = "info" // Default LogLevel
+	}
+	// LogDir can remain empty if not set, logger handles it (defaults to stdout)
+
+	if err := logger.Init(appCfg.LogLevel, appCfg.LogDir); err != nil {
+		// Pre-logger error, as logger init failed.
+		fmt.Printf("CRITICAL: Failed to initialize logger for CLI: %v\n", err)
+		os.Exit(1)
 	}
 
 	// 3. Instantiate the downloader service
@@ -366,7 +381,7 @@ func main() {
 	// fmt.Printf("Subscription plan: %s\n\n", planDesc)
 	// ... original URL processing loop ...
 
-	fmt.Println("\nFinished (Placeholder - Download logic not yet implemented).")
+	logger.Info("Finished (Placeholder - Download logic not yet implemented).")
 }
 
 // Remaining utility functions that need moving:

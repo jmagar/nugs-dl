@@ -40,6 +40,7 @@ type DownloadJob struct {
 	CurrentFile  string          `json:"currentFile,omitempty"`  // Name of the file currently being downloaded/processed
 	SpeedBPS     int64           `json:"speedBps"`               // Current download speed in Bytes per second
 	ArtworkURL   string          `json:"artworkUrl,omitempty"`   // URL for album/video artwork
+	ContainerID  string          `json:"containerId,omitempty"`  // Unique identifier for the album/show (e.g., nugs.net containerID)
 	// Track information
 	CurrentTrack int            `json:"currentTrack,omitempty"` // Current track number (1-based)
 	TotalTracks  int            `json:"totalTracks,omitempty"`  // Total number of tracks

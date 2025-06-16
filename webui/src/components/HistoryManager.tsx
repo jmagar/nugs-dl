@@ -22,6 +22,9 @@ import {
 } from "lucide-react"
 
 // Convert DownloadJob to local history item interface
+import { ArrowRightLeft } from "lucide-react"; // Added for toggle button
+// import { toast } from 'sonner'; // Already imported
+
 interface HistoryItemProps {
   id: string
   title: string
@@ -31,9 +34,35 @@ interface HistoryItemProps {
   date: string
   size: string
   format: string
+  originalUrl: string; // Added for toggle functionality
+  onAddDownload: (url: string) => Promise<void>; // Added for toggle functionality
 }
 
 const HistoryItem = ({ item }: { item: HistoryItemProps }) => {
+  // Helper function to extract ID and type from URL (copied from QueueItem.tsx)
+  const extractIdAndType = (url: string): { id: string | null; type: 'audio' | 'video' | 'artist' | 'unknown' } => {
+    if (!url) return { id: null, type: 'unknown' };
+    try {
+      const parsedUrl = new URL(url);
+      const pathParts = parsedUrl.pathname.split('/').filter(Boolean);
+
+      if (url.includes('play.nugs.net/release/')) {
+        const id = pathParts[pathParts.indexOf('release') + 1];
+        if (id && /^[0-9]+$/.test(id)) return { id, type: 'audio' };
+      } else if (url.includes('play.nugs.net/watch/livestreams/exclusive/')) {
+        const id = pathParts[pathParts.indexOf('exclusive') + 1];
+        if (id && /^[0-9]+$/.test(id)) return { id, type: 'video' };
+      } else if (url.includes('play.nugs.net/browse/artists/')) { // Example for artist page
+        const id = pathParts[pathParts.indexOf('artists') + 1];
+        if (id && /^[0-9]+$/.test(id)) return { id, type: 'artist' };
+      }
+    } catch {
+      // console.error("Error parsing URL for ID/Type:", url);
+      return { id: null, type: 'unknown' };
+    }
+    return { id: null, type: 'unknown' };
+  };
+
   
   // Return appropriate icon and badge styling based on content type
   const getTypeBadge = () => {
@@ -182,6 +211,42 @@ const HistoryItem = ({ item }: { item: HistoryItemProps }) => {
             >
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
+            {/* Toggle Audio/Video Button START */}
+            {(() => {
+              const { id, type: currentType } = extractIdAndType(item.originalUrl);
+              if (!id || currentType === 'unknown' || currentType === 'artist') return null;
+
+              const targetType = currentType === 'audio' ? 'video' : 'audio';
+              const newUrl = currentType === 'audio'
+                ? `https://play.nugs.net/watch/livestreams/exclusive/${id}`
+                : `https://play.nugs.net/release/${id}`;
+
+              return (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="border-gray-600 hover:border-gray-500"
+                  onClick={async () => {
+                    toast.info(`Adding ${targetType} version to queue...`);
+                    try {
+                      await item.onAddDownload(newUrl);
+                      toast.success(`${targetType.charAt(0).toUpperCase() + targetType.slice(1)} version added to queue!`, {
+                        description: `URL: ${newUrl}`
+                      });
+                    } catch (error) {
+                      toast.error(`Failed to add ${targetType} version.`, {
+                        description: error instanceof Error ? error.message : 'Unknown error'
+                      });
+                    }
+                  }}
+                  title={`Switch to ${targetType} version`}
+                >
+                  <ArrowRightLeft className="h-3.5 w-3.5 mr-1" />
+                  {`Get ${targetType.charAt(0).toUpperCase() + targetType.slice(1)}`}
+                </Button>
+              );
+            })()}
+            {/* Toggle Audio/Video Button END */}
           </div>
         </div>
         
@@ -207,7 +272,11 @@ const HistoryItem = ({ item }: { item: HistoryItemProps }) => {
   )
 }
 
-const HistoryManager = () => {
+interface HistoryManagerProps {
+  onAddDownload: (url: string) => Promise<void>;
+}
+
+const HistoryManager = ({ onAddDownload }: HistoryManagerProps) => {
   const [searchQuery, setSearchQuery] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')
   const [historyItems, setHistoryItems] = useState<HistoryItemProps[]>([])
@@ -258,14 +327,16 @@ const HistoryManager = () => {
     return {
       id: job.id,
       title: title,
-      type: 'album', // Default to album, could be enhanced based on URL analysis
-      url: job.originalUrl,
-      path: 'N/A', // Backend doesn't provide download path yet
-      date: job.completedAt ? new Date(job.completedAt).toLocaleDateString() : 'Unknown',
-      size: 'Unknown', // Backend doesn't provide file size yet
-      format: 'FLAC' // Default format
-    }
-  }, [extractTitleFromUrl])
+      type: job.type || 'album', // Default to album if type is missing
+      url: job.url, // This is the display URL for the history item
+      originalUrl: job.originalUrl || job.url, // This is for the toggle functionality
+      onAddDownload: onAddDownload, // Pass down the function for toggling
+      path: job.path || 'N/A',
+      date: job.completedAt ? new Date(job.completedAt).toLocaleString() : 'N/A',
+      size: job.sizeFormatted || 'N/A',
+      format: job.format || 'N/A',
+    } as HistoryItemProps;
+  }, [extractTitleFromUrl, onAddDownload])
   
   // Load history data
   useEffect(() => {

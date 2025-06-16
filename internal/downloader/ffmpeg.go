@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"nugs-dl/internal/logger" // Import the logger package
 )
 
 // Constants related to FFmpeg interaction
@@ -27,7 +29,7 @@ func (d *Downloader) getFfmpegCmd() string {
 	}
 	// Placeholder - assumes ffmpeg is in PATH even if config says otherwise
 	// Needs fix when refactoring how script dir is found.
-	fmt.Println("Warning: Cannot determine relative ffmpeg path yet, assuming it's in PATH.")
+	logger.Warn("Cannot determine relative ffmpeg path, assuming ffmpeg is in system PATH.", "useFfmpegEnvVar", d.Config.UseFfmpegEnvVar)
 	return "ffmpeg"
 	// return "./ffmpeg" // Original alternative
 }
@@ -82,7 +84,7 @@ func (d *Downloader) getDuration(tsPath string) (int, error) {
 	// Check if stderr contains the expected message when no output is given
 	if !strings.Contains(errStr, "At least one output file must be specified") {
 		// If the expected message isn't there, something else might be wrong
-		fmt.Printf("Warning: Unexpected ffmpeg output during duration check:\n%s\n", errStr)
+		logger.Warn("Unexpected ffmpeg output during duration check. Will attempt to parse duration anyway.", "ffmpegOutput", errStr, "tsPath", tsPath)
 		// Continue trying to parse duration anyway, it might be there
 	}
 
@@ -130,14 +132,14 @@ func writeChapsFile(chapters []interface{}, durationSeconds int) error {
 	for i, chapter := range chapters {
 		chapterMap, ok := chapter.(map[string]interface{})
 		if !ok {
-			fmt.Printf("Warning: Skipping invalid chapter data at index %d\n", i)
+			logger.Warn("Skipping invalid chapter data, expected map[string]interface{}.", "chapterIndex", i, "chapterData", chapter)
 			continue
 		}
 
 		startSeconds, startOk := chapterMap["chapterSeconds"].(float64)
 		chapterName, nameOk := chapterMap["chaptername"].(string)
 		if !startOk || !nameOk {
-			fmt.Printf("Warning: Skipping chapter with missing data at index %d\n", i)
+			logger.Warn("Skipping chapter due to missing 'chapterSeconds' or 'chaptername'.", "chapterIndex", i, "startOk", startOk, "nameOk", nameOk, "chapterData", chapterMap)
 			continue
 		}
 
@@ -168,7 +170,7 @@ func writeChapsFile(chapters []interface{}, durationSeconds int) error {
 			return fmt.Errorf("failed to write chapter %d data: %w", i, err)
 		}
 	}
-	fmt.Println("Chapter file created successfully.")
+	logger.Info("FFmpeg chapter metadata file created successfully.", "filename", chapsFileFname)
 	return nil
 }
 
@@ -185,7 +187,7 @@ func (d *Downloader) tsToMp4(tsInputPath, mp4OutputPath string, chaptersAvailabl
 		if _, err := os.Stat(chapsFileFname); err == nil {
 			args = append(args, "-f", "ffmetadata", "-i", chapsFileFname, "-map_metadata", "1")
 		} else {
-			fmt.Printf("Warning: Chapter metadata file %s not found, skipping chapter embedding.\n", chapsFileFname)
+			logger.Warn("Chapter metadata file not found, skipping chapter embedding.", "expectedFile", chapsFileFname, "inputTS", tsInputPath)
 			// Reset flag so we don't try to delete it later
 			chaptersAvailable = false
 		}
@@ -195,7 +197,7 @@ func (d *Downloader) tsToMp4(tsInputPath, mp4OutputPath string, chaptersAvailabl
 	cmd := exec.Command(ffmpegCmd, args...)
 	cmd.Stderr = &errBuffer
 
-	fmt.Println("Executing FFmpeg remux command:", strings.Join(cmd.Args, " "))
+	logger.Info("Executing FFmpeg remux command", "command", ffmpegCmd, "arguments", args)
 	err := cmd.Run()
 	if err != nil {
 		// Clean up potentially incomplete MP4 file on error
@@ -207,16 +209,16 @@ func (d *Downloader) tsToMp4(tsInputPath, mp4OutputPath string, chaptersAvailabl
 	// Delete the raw TS file after successful remux
 	err = os.Remove(tsInputPath)
 	if err != nil {
-		fmt.Printf("Warning: Failed to delete temporary TS file %s: %v\n", tsInputPath, err)
+		logger.Warn("Failed to delete temporary TS file after remux.", "file", tsInputPath, "error", err)
 	}
 	// Delete the chapter file if it was used
 	if chaptersAvailable {
 		err = os.Remove(chapsFileFname)
 		if err != nil {
-			fmt.Printf("Warning: Failed to delete temporary chapter file %s: %v\n", chapsFileFname, err)
+			logger.Warn("Failed to delete temporary chapter metadata file.", "file", chapsFileFname, "error", err)
 		}
 	}
 
-	fmt.Println("FFmpeg remux completed successfully.")
+	logger.Info("FFmpeg remux completed successfully.", "outputFile", mp4OutputPath)
 	return nil
 }

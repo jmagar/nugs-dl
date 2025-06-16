@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	"nugs-dl/internal/logger" // Import the logger package
 	"nugs-dl/pkg/api"
 
 	"github.com/grafov/m3u8"
@@ -99,7 +100,7 @@ func (d *Downloader) parseHlsMaster(qual *Quality) error {
 	}
 
 	if bitrate == "" {
-		fmt.Printf("Warning: could not determine bitrate for HLS variant %s\n", variantUri)
+		logger.Warn("Could not determine bitrate for HLS variant, using fallback spec.", "variantURI", variantUri, "playlistURL", qual.URL)
 		qual.Specs = "AAC (Unknown Bitrate)" // Fallback spec
 	} else {
 		qual.Specs = bitrate + " Kbps AAC"
@@ -157,7 +158,7 @@ func decryptTrack(key, iv []byte) ([]byte, error) {
 	mode := cipher.NewCBCDecrypter(block, iv)
 	decrypted := make([]byte, len(encData))
 
-	fmt.Println("Decrypting HLS segment...")
+	logger.Info("Decrypting HLS segment...", "tempFile", tempEncFile, "sizeBytes", len(encData))
 	mode.CryptBlocks(decrypted, encData)
 
 	// Remove PKCS#7 padding (common for AES CBC)
@@ -196,7 +197,7 @@ func pkcs7Unpad(data []byte, blockSize int) ([]byte, error) {
 // (Moved from main.go)
 func tsToAac(decData []byte, outPath, ffmpegNameStr string) error {
 	// TODO: Move ffmpeg execution to ffmpeg.go
-	fmt.Println("Remuxing TS to AAC container...")
+	logger.Info("Remuxing decrypted TS data to AAC container...", "outputFile", outPath, "ffmpegCmd", ffmpegNameStr)
 	var errBuffer bytes.Buffer
 	cmd := exec.Command(ffmpegNameStr, "-i", "pipe:0", "-c:a", "copy", "-vn", "-y", outPath) // pipe:0 specifies stdin
 	cmd.Stdin = bytes.NewReader(decData)
@@ -213,14 +214,14 @@ func tsToAac(decData []byte, outPath, ffmpegNameStr string) error {
 // (Refactored from hlsOnly in main.go)
 func (d *Downloader) downloadHls(jobID, trackPath, masterPlaylistUrl string) error {
 	// 1. Parse the master playlist to get the media playlist URL for the best variant
-	fmt.Println("Parsing HLS master playlist...")
+	logger.Info("Parsing HLS master playlist...", "jobID", jobID, "playlistURL", masterPlaylistUrl)
 	qual := &Quality{URL: masterPlaylistUrl} // Create a temporary quality struct
 	err := d.parseHlsMaster(qual)
 	if err != nil {
 		return fmt.Errorf("failed to parse HLS master playlist: %w", err)
 	}
 	mediaPlaylistUrl := qual.URL
-	fmt.Printf("Selected HLS variant: %s (URL: %s)\n", qual.Specs, mediaPlaylistUrl)
+	logger.Info("Selected HLS variant for download", "jobID", jobID, "specs", qual.Specs, "mediaPlaylistURL", mediaPlaylistUrl)
 
 	// Send initial "Starting download" progress update
 	d.sendProgress(api.ProgressUpdate{
@@ -265,7 +266,7 @@ func (d *Downloader) downloadHls(jobID, trackPath, masterPlaylistUrl string) err
 	if !strings.HasPrefix(keyUri, "http") {
 		keyUri = manBase + keyUri
 	}
-	fmt.Println("Fetching HLS key...")
+	logger.Info("Fetching HLS decryption key...", "jobID", jobID, "keyURL", keyUri)
 	keyBytes, err := d.getKey(keyUri)
 	if err != nil {
 		return fmt.Errorf("failed to get HLS key from %s: %w", keyUri, err)
@@ -287,7 +288,7 @@ func (d *Downloader) downloadHls(jobID, trackPath, masterPlaylistUrl string) err
 	// 5. Download First Segment (assuming audio only needs one)
 	segmentUri := media.Segments[0].URI
 	segmentUrl := manBase + segmentUri + query
-	fmt.Println("Downloading encrypted HLS segment...")
+	logger.Info("Downloading encrypted HLS segment...", "jobID", jobID, "segmentURL", segmentUrl, "targetTempFile", tempEncFile)
 	// Before download segment:
 	d.sendProgress(api.ProgressUpdate{JobID: jobID, Message: "Downloading HLS segment..."})
 	err = d.downloadFile(jobID, tempEncFile, segmentUrl) // Pass jobID here

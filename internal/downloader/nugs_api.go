@@ -1,9 +1,12 @@
 package downloader
 
 import (
+	"bytes"         // Added for re-creating io.ReadCloser from logged body
+	"nugs-dl/internal/logger"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"            // Added for io.ReadAll
 	"net/http"
 	"net/url"
 	"strconv"
@@ -21,6 +24,7 @@ const (
 
 // getAlbumMeta retrieves metadata for a specific album/release/video container ID.
 func (d *Downloader) getAlbumMeta(containerId string) (*AlbumMeta, error) {
+	logger.Debug("[getAlbumMeta] Entry", "containerId", containerId)
 	req, err := http.NewRequest(http.MethodGet, streamApiBase+"api.aspx", nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create album meta request: %w", err)
@@ -37,6 +41,21 @@ func (d *Downloader) getAlbumMeta(containerId string) (*AlbumMeta, error) {
 		return nil, fmt.Errorf("failed to perform album meta request: %w", err)
 	}
 	defer do.Body.Close()
+
+	// Read the body for logging, then replace it for decoding
+	bodyBytes, errRead := io.ReadAll(do.Body)
+	if errRead != nil {
+		logger.Warn("[getAlbumMeta] Failed to read response body for logging", "containerId", containerId, "error", errRead)
+		// If reading fails, we can't log the body.
+		// The original defer do.Body.Close() will still run.
+		// We must return an error as we can't proceed with decoding.
+		return nil, fmt.Errorf("failed to read album meta response body: %w", errRead)
+	} else {
+		logger.Debug("[getAlbumMeta] Raw API Response", "containerId", containerId, "responseBody", string(bodyBytes))
+	}
+	// Restore the body for the JSON decoder
+	do.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
 	if do.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("get album meta failed: %s", do.Status)
 	}

@@ -241,20 +241,6 @@ the downloader will:
 
 ---
 
-## Prerequisites
-
-1. **Go Environment**  
-   The downloader is written in Go. Build or install as per standard Go tools.
-2. **`ffmpeg`**  
-   Required for some downloads (e.g., video, HLS).  
-   Make sure the path to ffmpeg is set correctly in your config, or available in your environment.
-3. **nugs.net Account**  
-   You must provide valid login credentials or token in your config.
-4. **nugs Binary**  
-   If your workflow uses the original `nugs`/`nugs-dl` binary, ensure its path is set in the config.
-
----
-
 ## Configuration
 
 All options are set in a single YAML file (default: `config.yaml`).  
@@ -270,7 +256,7 @@ token: ""
 useFfmpegEnvVar: false
 
 dryRun: true                        # Enable dry run mode (simulate actions only)
-logDir: "./logs"                    # Directory for log files
+logDir: "/logs"                    # Directory for log files
 logLevel: "info"                    # Logging verbosity: debug, info, warn, error
 nugsBinaryPath: "./nugs"            # Path to nugs executable
 ffmpegPath: "/usr/bin/ffmpeg"       # Path to ffmpeg executable

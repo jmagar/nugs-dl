@@ -4,14 +4,17 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: nugs-dl
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
     networks:
       - jakenet
     ports:
-      - "6890:8080"
+      - 6890:8080
     volumes:
       # Mount downloads directory to persist downloaded files
       - /mnt/user/data/media/music:/music
-      # Mount config directory to persist configuration (includes config.json)
+      - /mnt/user/data/media/livestreams:/livestreams
+      # Mount config directory to persist configuration (includes config.yaml)
       - /mnt/cache/appdata/nugs-dl/config:/app/config
       - /mnt/cache/appdata/nugs-dl/logs:/app/logs
     environment:
@@ -21,14 +24,23 @@ services:
       - PGID=100
       # Optional: Set custom output path (defaults to /app/downloads)
       - NUGS_OUTPUT_PATH=/music
+      - NUGS_LIVE_PATH=/livestreams
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/ping"]
+      test:
+        - CMD
+        - wget
+        - --no-verbose
+        - --tries=1
+        - --spider
+        - http://localhost:8080/ping
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-
 networks:
   jakenet:
     external: true
+x-dockge:
+  urls:
+    - https://nugs-dl.tootie.tv

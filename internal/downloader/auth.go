@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"nugs-dl/internal/logger" // Import the logger package
 	// Import config locally if needed, or expect it via Downloader struct
 	// appConfig "main/internal/config"
 )
@@ -27,7 +29,7 @@ const (
 // Authenticate performs email/password authentication.
 // It takes the Downloader context to access the HTTP client.
 func (d *Downloader) Authenticate(email, pwd string) (string, error) {
-	fmt.Println("Authenticating...") // Keep user feedback?
+	logger.Info("Attempting authentication...", "email", email) // Log email for context, be mindful of PII if logs are public
 	data := url.Values{}
 	data.Set("client_id", clientId)
 	data.Set("grant_type", "password")
@@ -53,7 +55,7 @@ func (d *Downloader) Authenticate(email, pwd string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to decode auth response: %w", err)
 	}
-	fmt.Println("Authentication successful.")
+	logger.Info("Authentication successful.", "email", email)
 	return obj.AccessToken, nil
 }
 
@@ -125,7 +127,7 @@ func parseTimestamps(start, end string) (string, string) {
 	endTime, errEnd := time.Parse(layout, end)
 	// Basic error check, return "0" maybe?
 	if errStart != nil || errEnd != nil {
-		fmt.Println("Warning: Could not parse timestamps from subscription info")
+		logger.Warn("Could not parse timestamps from subscription info", "startString", start, "endString", end, "startError", errStart, "endError", errEnd)
 		return "0", "0"
 	}
 	parsedStart := strconv.FormatInt(startTime.Unix(), 10)

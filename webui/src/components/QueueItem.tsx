@@ -8,8 +8,11 @@ import {
   X, 
   Music, 
   PlayCircle,
-  RefreshCw
+  RefreshCw,
+  ArrowRightLeft // Corrected icon for toggle button
 } from "lucide-react"
+
+import { toast } from 'sonner'; // Added for notifications
 
 export interface QueueItemProps {
   id: string
@@ -25,7 +28,9 @@ export interface QueueItemProps {
   currentTrack?: number
   totalTracks?: number
   artworkUrl?: string
-  onRemove?: () => void
+  onRemove?: () => void;
+  originalUrl: string; // Added to get ID and type for toggling
+  onAddDownload: (url: string) => Promise<void>; // Added to submit new URL to queue
 }
 
 const QueueItem = ({ 
@@ -40,15 +45,95 @@ const QueueItem = ({
   currentTrack,
   totalTracks,
   artworkUrl,
-  onRemove
+  onRemove,
+  originalUrl,
+  onAddDownload
 }: QueueItemProps) => {
+  // Helper function to extract ID and type from URL
+  const extractIdAndType = (url: string): { id: string | null; type: 'audio' | 'video' | 'artist_page' | 'unknown' } => {
+    try {
+      const urlObj = new URL(url);
+      const pathParts = urlObj.pathname.split('/').filter(part => part.length > 0);
+      const hashParts = urlObj.hash.split('/').filter(part => part.length > 0); // For URLs like /#/videos/...
+
+      // Check for /release/{ID}
+      if (pathParts.includes('release')) {
+        const idIndex = pathParts.indexOf('release') + 1;
+        if (idIndex < pathParts.length && /^\d+$/.test(pathParts[idIndex])) {
+          return { id: pathParts[idIndex], type: 'audio' };
+        }
+      }
+
+      // Check for /watch/livestreams/exclusive/{ID}
+      if (pathParts.includes('watch') && pathParts.includes('livestreams') && pathParts.includes('exclusive')) {
+        const idIndex = pathParts.indexOf('exclusive') + 1;
+        if (idIndex < pathParts.length && /^\d+$/.test(pathParts[idIndex])) {
+          return { id: pathParts[idIndex], type: 'video' };
+        }
+      }
+
+      // Check for /#/videos/artist/.../container/{ID}
+      if (hashParts.includes('videos') && hashParts.includes('container')) {
+          const idIndex = hashParts.indexOf('container') + 1;
+          if (idIndex < hashParts.length && /^\d+$/.test(hashParts[idIndex])) {
+          return { id: hashParts[idIndex], type: 'video' };
+        }
+      }
+      
+      // Check for /#/artist/{ID}
+      if (hashParts.includes('artist')) {
+        const idIndex = hashParts.indexOf('artist') + 1;
+        if (idIndex < hashParts.length && /^\d+$/.test(hashParts[idIndex])) {
+          return { id: hashParts[idIndex], type: 'artist_page' };
+        }
+      }
+
+    } catch { // 'e' removed as it's unused when console.error is commented
+      // console.error("Error parsing URL for ID/Type:", url); // Optional: for debugging, 'e' removed
+      return { id: null, type: 'unknown' };
+    }
+    return { id: null, type: 'unknown' };
+  };
   
   // Return appropriate action buttons based on status
   const renderActionButtons = () => {
+    const { id: itemId, type: itemType } = extractIdAndType(originalUrl);
+    let toggleButton = null;
+
+    if (itemId && (itemType === 'audio' || itemType === 'video')) {
+      const targetType = itemType === 'audio' ? 'video' : 'audio';
+      const newUrl = itemType === 'audio'
+        ? `https://play.nugs.net/watch/livestreams/exclusive/${itemId}`
+        : `https://play.nugs.net/release/${itemId}`;
+
+      toggleButton = (
+        <Button
+          variant="outline"
+          size="sm"
+          className="border-gray-600 hover:border-gray-500"
+          onClick={async () => {
+            try {
+              await onAddDownload(newUrl);
+              toast.success(`${targetType.charAt(0).toUpperCase() + targetType.slice(1)} version added to queue.`);
+            } catch (error) {
+              toast.error(`Failed to add ${targetType} version.`);
+              console.error("Error toggling download type:", error);
+            }
+          }}
+          title={`Switch to ${targetType} version`}
+        >
+          <ArrowRightLeft className="h-3.5 w-3.5 mr-1" /> {/* Added margin for spacing */}
+          {`Get ${targetType.charAt(0).toUpperCase() + targetType.slice(1)}`}
+        </Button>
+      );
+    }
+
     switch (status) {
       case 'downloading':
         return (
-          <Button 
+          <>
+            {toggleButton}
+            <Button 
             variant="outline" 
             size="sm" 
             className="border-gray-600 hover:border-gray-500"
@@ -56,10 +141,12 @@ const QueueItem = ({
             <Pause className="h-3.5 w-3.5" />
             Pause
           </Button>
+          </>
         )
       case 'queued':
         return (
           <>
+            {toggleButton}
             <Button 
               variant="outline" 
               size="sm" 
@@ -82,6 +169,7 @@ const QueueItem = ({
       case 'paused':
         return (
           <>
+            {toggleButton}
             <Button 
               variant="outline" 
               size="sm" 
@@ -104,6 +192,7 @@ const QueueItem = ({
       case 'error':
         return (
           <>
+            {toggleButton}
             <Button 
               variant="outline" 
               size="sm" 
@@ -124,7 +213,13 @@ const QueueItem = ({
           </>
         )
       case 'completed':
-        return null
+        // Show toggle button even for completed items
+        return (
+          <>
+            {toggleButton}
+            {/* Add other relevant buttons for completed items here if needed, e.g., download archive */}
+          </>
+        )
       default:
         return null
     }

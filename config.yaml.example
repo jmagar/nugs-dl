@@ -1,0 +1,50 @@
+# Nugs-DL Configuration Example
+# This file provides an example of all available configuration options.
+# Remove the '#' from the lines you wish to use and fill in your details.
+
+# --- Account Credentials ---
+email: "your-email@example.com"      # Your nugs.net email address
+password: "your-nugs-password"      # Your nugs.net password
+
+# --- Download Settings ---
+format: 4                           # Global default quality. 1:ALAC, 2:FLAC, 3:MQA, 4:360RA/Best, 5:AAC
+videoFormat: 5                      # Global default video quality. 1:480p, 2:720p, 3:1080p, 4:1440p, 5:4K/Best
+outPath: "/music"                        # HOST: Mount a local path here. CONTAINER: Path inside the container for music.
+liveVideoPath: "/livestreams"              # HOST: Mount a local path here. CONTAINER: Path inside the container for videos.
+
+# --- Advanced & System Settings ---
+dryRun: false                       # Set to true to simulate downloads without writing files.
+logDir: "/app/logs"                    # CONTAINER: Path for log files. Mount a host directory here.
+logLevel: "info"                     # Logging verbosity: debug, info, warn, error
+ffmpegPath: "/usr/bin/ffmpeg"       # CONTAINER: Path to ffmpeg executable.
+
+# --- Behavior Toggles ---
+forceVideo: false                   # Force video download when both audio and video are available.
+skipVideos: false                   # Skip all video downloads when processing artist pages.
+skipChapters: false                 # Skip creating chapter files for videos.
+
+# --- Performance ---
+maxConcurrentDownloads: 2           # Number of concurrent downloads allowed.
+maxRetries: 3                       # How many times to retry a failed download.
+retryDelaySeconds: 10               # Seconds to wait between retries.
+
+# --- Monitoring Mode (for automatic polling) ---
+monitor: false                      # Enable monitoring mode to automatically poll for new shows.
+monitorIntervalHours: 6             # Global interval (in hours) for polling artists.
+
+# --- Notifications (Gotify) ---
+notifications: false                # Enable/disable Gotify notifications globally.
+gotifyUrl: ""                         # Your Gotify server URL (e.g., https://gotify.example.com)
+gotifyToken: ""                       # Your Gotify application token.
+
+# --- Artist-Specific Overrides ---
+# You can override global settings for individual artists.
+artists:
+  - id: 1125
+    name: "Billy Strings"
+    enabled: true
+    monitorIntervalHours: 2         # Example: Poll Billy Strings more frequently.
+    notifications: false            # Example: Disable notifications for this artist.
+  - id: 1205
+    name: "Goose"
+    enabled: true                   # This artist will use all global settings.

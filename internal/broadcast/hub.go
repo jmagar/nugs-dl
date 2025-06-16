@@ -2,8 +2,9 @@ package broadcast
 
 import (
 	"encoding/json"
-	"fmt"
-	"nugs-dl/pkg/api" // Updated path
+	"fmt"                     // Needed for Sprintf
+	"nugs-dl/internal/logger" // Import the logger package
+	"nugs-dl/pkg/api"         // Updated path
 	"sync"
 )
 
@@ -36,24 +37,24 @@ func NewHub() *Hub {
 
 // Run starts the hub's processing loop.
 func (h *Hub) Run() {
-	fmt.Println("[Hub] Starting broadcaster...")
+	logger.Info("[Hub] Starting broadcaster...")
 	for {
 		select {
 		case client := <-h.register:
-			fmt.Println("[Hub] Client registered")
+			logger.Info("[Hub] Client registered", "client", fmt.Sprintf("%p", client)) // Log client address for tracking
 			h.mutex.Lock()
 			h.clients[client] = true
 			h.mutex.Unlock()
 		case client := <-h.unregister:
 			h.mutex.Lock()
 			if _, ok := h.clients[client]; ok {
-				fmt.Println("[Hub] Client unregistered")
+				logger.Info("[Hub] Client unregistered", "client", fmt.Sprintf("%p", client))
 				delete(h.clients, client)
 				close(client) // Close the client channel
 			}
 			h.mutex.Unlock()
 		case message := <-h.broadcast:
-			// fmt.Println("[Hub] Broadcasting message...")
+			// logger.Debug("[Hub] Broadcasting message...") // Potentially too verbose
 			h.mutex.RLock()
 			slowClients := make([]chan []byte, 0) // Collect slow clients for cleanup
 			for client := range h.clients {
@@ -63,24 +64,25 @@ func (h *Hub) Run() {
 					// Successfully sent
 				default:
 					// Client channel is full - mark for potential cleanup
-					fmt.Println("[Hub Warning] Client channel full, marking slow client.")
+					logger.Warn("[Hub] Client channel full, marking slow client.", "client", fmt.Sprintf("%p", client))
 					slowClients = append(slowClients, client)
 				}
 			}
 			h.mutex.RUnlock()
-			
+
 			// Clean up slow clients (only if there are many to avoid closing responsive clients temporarily)
-			if len(slowClients) > 0 && len(slowClients) < len(h.clients) {
+			if len(slowClients) > 0 && len(slowClients) < len(h.clients) { // Avoid removing all clients if broadcast channel was overwhelmed
 				h.mutex.Lock()
 				for _, client := range slowClients {
 					// Double-check client still exists and is still full before removing
 					select {
 					case client <- message:
 						// Client recovered, don't remove
+						logger.Debug("[Hub] Slow client recovered, not removing.", "client", fmt.Sprintf("%p", client))
 					default:
 						// Client still full, remove it
 						if _, exists := h.clients[client]; exists {
-							fmt.Println("[Hub] Removing persistently slow client.")
+							logger.Warn("[Hub] Removing persistently slow client.", "client", fmt.Sprintf("%p", client))
 							delete(h.clients, client)
 							close(client)
 						}
@@ -97,8 +99,14 @@ func (h *Hub) Run() {
 
 // BroadcastProgressUpdate wraps the update in an SSEEvent and broadcasts it.
 func (h *Hub) BroadcastProgressUpdate(update api.ProgressUpdate) {
-	fmt.Printf("[Hub] Broadcasting progress update: Job %s, Percentage: %.1f%%, Speed: %d B/s\n", 
-		update.JobID, update.Percentage, update.SpeedBPS)
+	logger.Debug("[Hub] Broadcasting progress update", 
+		"jobID", update.JobID, 
+		"percentage", update.Percentage, 
+		"speedBPS", update.SpeedBPS,
+		"currentFile", update.CurrentFile,
+		"currentTrack", update.CurrentTrack,
+		"totalTracks", update.TotalTracks,
+	)
 		
 	event := api.SSEEvent{
 		Type: api.SSEProgressUpdate,
@@ -106,14 +114,14 @@ func (h *Hub) BroadcastProgressUpdate(update api.ProgressUpdate) {
 	}
 	messageBytes, err := json.Marshal(event)
 	if err != nil {
-		fmt.Printf("[Hub Error] Failed to marshal progress update event: %v\n", err)
+		logger.Error("[Hub] Failed to marshal progress update event", "error", err, "jobID", update.JobID)
 		return
 	}
 	select {
 	case h.broadcast <- messageBytes:
-		fmt.Printf("[Hub] Progress update queued for broadcast: Job %s\n", update.JobID)
+		logger.Debug("[Hub] Progress update queued for broadcast", "jobID", update.JobID)
 	default:
-		fmt.Println("[Hub Warning] Broadcast channel full, discarding progress update.")
+		logger.Warn("[Hub] Broadcast channel full, discarding progress update.", "jobID", update.JobID)
 	}
 }
 
@@ -125,20 +133,20 @@ func (h *Hub) BroadcastJobAdded(job *api.DownloadJob) {
 	}
 	messageBytes, err := json.Marshal(event)
 	if err != nil {
-		fmt.Printf("[Hub Error] Failed to marshal job added event: %v\n", err)
+		logger.Error("[Hub] Failed to marshal job added event", "error", err, "jobID", job.ID)
 		return
 	}
 	select {
 	case h.broadcast <- messageBytes:
+		logger.Debug("[Hub] Job added event queued for broadcast", "jobID", job.ID)
 	default:
-		fmt.Println("[Hub Warning] Broadcast channel full, discarding job added event.")
+		logger.Warn("[Hub] Broadcast channel full, discarding job added event.", "jobID", job.ID)
 	}
 }
 
 // BroadcastJobStatusUpdate wraps the job in an SSEEvent and broadcasts it.
 func (h *Hub) BroadcastJobStatusUpdate(job *api.DownloadJob) {
-	fmt.Printf("[Hub] Broadcasting job status update: Job %s, Status: %s\n", 
-		job.ID, job.Status)
+	logger.Info("[Hub] Broadcasting job status update", "jobID", job.ID, "status", job.Status)
 		
 	event := api.SSEEvent{
 		Type: api.SSEJobStatusUpdate,
@@ -146,14 +154,14 @@ func (h *Hub) BroadcastJobStatusUpdate(job *api.DownloadJob) {
 	}
 	messageBytes, err := json.Marshal(event)
 	if err != nil {
-		fmt.Printf("[Hub Error] Failed to marshal job status update event: %v\n", err)
+		logger.Error("[Hub] Failed to marshal job status update event", "error", err, "jobID", job.ID)
 		return
 	}
 	select {
 	case h.broadcast <- messageBytes:
-		fmt.Printf("[Hub] Job status update queued for broadcast: Job %s\n", job.ID)
+		logger.Debug("[Hub] Job status update queued for broadcast", "jobID", job.ID)
 	default:
-		fmt.Println("[Hub Warning] Broadcast channel full, discarding job status update.")
+		logger.Warn("[Hub] Broadcast channel full, discarding job status update.", "jobID", job.ID)
 	}
 }
 

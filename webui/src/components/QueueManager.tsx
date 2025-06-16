@@ -15,12 +15,13 @@ import {
 } from "lucide-react"
 
 interface QueueManagerProps {
+  onAddDownload: (url: string) => Promise<void>; // Added to pass down to QueueItem
   jobs: Record<string, DownloadJob>
   isLoading: boolean
   error: string | null
 }
 
-const QueueManager = ({ jobs, isLoading, error }: QueueManagerProps) => {
+const QueueManager = ({ jobs, isLoading, error, onAddDownload }: QueueManagerProps) => {
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTab, setActiveTab] = useState('all')
 
@@ -39,7 +40,9 @@ const QueueManager = ({ jobs, isLoading, error }: QueueManagerProps) => {
       errorMessage: job.errorMessage,
       currentTrack: job.currentTrack,
       totalTracks: job.totalTracks,
-      artworkUrl: job.artworkUrl
+      artworkUrl: job.artworkUrl,
+      originalUrl: job.originalUrl, // Added to pass to QueueItem
+      onAddDownload: onAddDownload // Added to pass to QueueItem
     }
   }
 

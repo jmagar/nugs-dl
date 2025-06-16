@@ -1,9 +1,9 @@
 package downloader
 
 import (
-	"fmt"
 	"time"
 
+	"nugs-dl/internal/logger" // Import the logger package
 	api "nugs-dl/pkg/api"
 )
 
@@ -217,19 +217,22 @@ func (wc *WriteCounter) Write(p []byte) (int, error) {
 			SpeedBPS:        speedBps,
 			// Status, Message, CurrentFile are set by the calling function via sendProgress
 		}
-		
-		fmt.Printf("[WriteCounter] Job %s: Downloaded %d/%d bytes (%.1f%%), Speed: %d B/s\n", 
-			wc.JobID, wc.Downloaded, wc.Total, percentage, speedBps)
-		
+		logger.Debug("[WriteCounter] Calculated progress",
+			"jobID", wc.JobID,
+			"downloadedBytes", wc.Downloaded,
+			"totalBytes", wc.Total,
+			"percentage", percentage,
+			"speedBPS", speedBps)
+
 		// Use non-blocking send
 		select {
 		case wc.ProgressChan <- update:
-			fmt.Printf("[WriteCounter] Progress update sent for Job %s\n", wc.JobID)
+			logger.Debug("[WriteCounter] Progress update sent successfully", "jobID", wc.JobID)
 		default:
-			fmt.Printf("[WriteCounter Warning] Progress channel full for Job %s, discarding update.\n", wc.JobID)
+			logger.Warn("[WriteCounter] Progress channel full, discarding update", "jobID", wc.JobID)
 		}
 	} else {
-		fmt.Printf("[WriteCounter] Progress channel is nil for Job %s\n", wc.JobID)
+		logger.Warn("[WriteCounter] Progress channel is nil, cannot send update", "jobID", wc.JobID)
 	}
 
 	return n, nil

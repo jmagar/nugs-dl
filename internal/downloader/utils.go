@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"nugs-dl/internal/logger" // Import the logger package
 	// "runtime" // No longer needed here
 	// "path/filepath" // No longer needed here
 )
@@ -19,7 +21,7 @@ const (
 
 // regexStrings defines the URL patterns to identify content types.
 // (Moved from main.go)
-var regexStrings = [11]string{
+var regexStrings = [12]string{
 	`^https://play.nugs.net/release/(\d+)$`,                     // 0: Album/Show/Video Release
 	`^https://play.nugs.net/#/playlists/playlist/(\d+)$`,        // 1: User Playlist (hash)
 	`^https://play.nugs.net/library/playlist/(\d+)$`,            // 2: User Playlist (library)
@@ -30,7 +32,8 @@ var regexStrings = [11]string{
 	`^https://play.nugs.net/watch/livestreams/exclusive/(\d+)$`, // 7: Exclusive Livestream (watch link)
 	`^https://play.nugs.net/#/my-webcasts/\d+-(\d+)-\d+-\d+$`,   // 8: My Webcast (hash, showID)
 	`^https://www.nugs.net/on/demandware.store/Sites-NugsNet-Site/default/(?:Stash-QueueVideo|NugsVideo-GetStashVideo)\?([a-zA-Z0-9=%&.-]+$)`, // 9: Purchased Livestream/Video (demandware)
-	`^https://play.nugs.net/library/webcast/(\d+)$`, // 10: My Webcast (library, containerID)
+	`^https://play.nugs.net/library/webcast/(\d+)$`,             // 10: My Webcast (library, containerID)
+	`^https://play.nugs.net/watch/release/(\d+)$`,               // 11: Watch Release URL (NEW)
 }
 
 // UrlType represents the type of nugs.net URL identified.
@@ -48,8 +51,9 @@ const (
 	WatchExclusiveLivestreamUrl // Same as above
 	MyWebcastHashUrl
 	PurchasedUrl
-	MyWebcastLibUrl
-	UnknownUrl // Sentinel for unknown types
+	MyWebcastLibUrl             // This is 10
+	WatchReleaseUrl             // This is 11 (NEW)
+	UnknownUrl // Sentinel for unknown types // This becomes 12
 )
 
 // checkUrl identifies the type of nugs.net URL and extracts the relevant ID.
@@ -142,7 +146,7 @@ func (d *Downloader) resolveRedirectURL(shortUrl string) (string, error) {
 	// if err != nil { ... }
 	// return finalUrlParsed.String(), nil
 
-	fmt.Printf("Resolved short URL %s to %s\n", shortUrl, finalUrl)
+	logger.Info("Resolved short URL", "from", shortUrl, "to", finalUrl)
 	return finalUrl, nil
 }
 

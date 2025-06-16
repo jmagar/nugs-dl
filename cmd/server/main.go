@@ -23,6 +23,7 @@ import (
 	// Import queue and api packages
 	"nugs-dl/internal/broadcast"
 	"nugs-dl/internal/downloader"
+	"nugs-dl/internal/logger" // Import the new logger package
 	"nugs-dl/internal/queue"
 	"nugs-dl/internal/worker"
 
@@ -47,29 +48,36 @@ func main() {
 	var loadErr error
 	currentConfig, loadErr = appConfig.LoadConfig()
 	if loadErr != nil {
-		fmt.Printf("Error loading config.json: %v\n", loadErr)
-		// Decide if server should run with default/empty config or exit
-		// For now, let's exit if config is required and fails to load
+		// If config loading fails, logger might not be initialized. Print critical error and exit.
+		// This is a pre-logger failure scenario.
+		fmt.Printf("CRITICAL: Error loading initial configuration: %v\n", loadErr)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Configuration loaded: %+v\n", currentConfig)
+	// Initialize the logger as early as possible after config is loaded
+	if err := logger.Init(currentConfig.LogLevel, currentConfig.LogDir); err != nil {
+		// If logger initialization fails, we can't use the logger. Print critical error and exit.
+		fmt.Printf("CRITICAL: Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+
+	logger.Info("Initial configuration loaded successfully.", "config", currentConfig)
 
 	// Initialize shared HTTP client with cookie jar
 	jar, _ := cookiejar.New(nil)
 	sharedHttpClient = &http.Client{Jar: jar}
-	fmt.Println("HTTP Client initialized.")
+	logger.Info("Shared HTTP Client initialized.")
 
 	// Create the progress channel with larger buffer for high-frequency downloads
 	progressUpdates = make(chan api.ProgressUpdate, 1000) // Keep using package name
 
 	// Initialize the Queue Manager FIRST
 	queueManager = queue.NewQueueManager()
-	fmt.Println("Queue Manager initialized.")
+	logger.Info("Queue Manager initialized.")
 
 	// Initialize the Downloader Service, passing channel AND queue manager
 	downloaderService = downloader.NewDownloader(currentConfig, sharedHttpClient, progressUpdates, queueManager)
-	fmt.Println("Downloader Service initialized.")
+	logger.Info("Downloader Service initialized.")
 
 	// Initialize and run the Broadcaster Hub
 	messageHub = broadcast.NewHub()
@@ -77,10 +85,16 @@ func main() {
 
 	// Start the Progress Consumer goroutine to forward updates to the Hub
 	go func() {
-		fmt.Println("[Progress Consumer] Started...")
+		logger.Info("[Progress Consumer] Started...")
 		for update := range progressUpdates {
-			fmt.Printf("[Progress Consumer] Received update: Job %s, Percentage: %.1f%%, Speed: %d B/s\n", 
-				update.JobID, update.Percentage, update.SpeedBPS)
+			logger.Debug("[Progress Consumer] Received update", 
+				"JobID", update.JobID, 
+				"Percentage", update.Percentage, 
+				"SpeedBPS", update.SpeedBPS,
+				"File", update.CurrentFile,
+				"Track", update.CurrentTrack,
+				"TotalTracks", update.TotalTracks,
+			)
 			
 			// Update the job progress in the queue manager
 			queueManager.UpdateJobProgress(update.JobID, update.Percentage, update.SpeedBPS, update.CurrentFile, update.CurrentTrack, update.TotalTracks)
@@ -88,7 +102,7 @@ func main() {
 			// Forward specific ProgressUpdate to the hub for SSE broadcasting
 			messageHub.BroadcastProgressUpdate(update) // Use specific method
 		}
-		fmt.Println("[Progress Consumer] Channel closed, exiting.")
+		logger.Info("[Progress Consumer] Progress updates channel closed, exiting.")
 	}()
 
 	// Start the Background Worker
@@ -143,37 +157,38 @@ func main() {
 
 	// Run the server
 	port := "8080" // Consider making the port configurable later
-	fmt.Println("Starting server on http://localhost:" + port)
+	logger.Info("Starting server", "address", "http://localhost:"+port)
 	err := router.Run(":" + port)
 	if err != nil {
-		panic("Failed to start server: " + err.Error())
+		logger.Error("Failed to start server", "error", err)
+		panic("Failed to start server: " + err.Error()) // Keep panic for fatal startup error
 	}
 }
 
 // getConfigHandler handles GET /api/config requests
 func getConfigHandler(c *gin.Context) {
-	fmt.Println("[getConfigHandler] Received request") // Log entry
+	logger.Debug("[getConfigHandler] Received request")
 	// Reload config from file on each request to ensure freshness
-	cfg, err := appConfig.LoadConfig()
+	cfg, err := appConfig.LoadConfig() // This already logs errors internally if they occur during load
 	if err != nil {
-		fmt.Printf("[getConfigHandler] Error reloading config: %v\n", err)
+		logger.Error("[getConfigHandler] Error reloading config", "error", err)
 		// Determine appropriate error response - e.g., internal server error
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load server configuration"})
 		return
 	}
-	fmt.Printf("[getConfigHandler] Successfully loaded config: %+v\n", cfg) // Log loaded config
+	logger.Debug("[getConfigHandler] Successfully loaded config", "config", cfg)
 
 	// No need for mutex here as we are loading fresh from file
 	// configMutex.RLock()
 	// defer configMutex.RUnlock()
 	// if currentConfig == nil { // No longer using global currentConfig directly here
-	// 	fmt.Println("Error: currentConfig is nil in getConfigHandler")
+	// 	logger.Error("Error: currentConfig is nil in getConfigHandler")
 	// 	c.JSON(http.StatusInternalServerError, gin.H{"error": "Server configuration is not loaded"})
 	// 	return
 	// }
 
 	// Return the freshly loaded config
-	fmt.Println("[getConfigHandler] Sending response") // Log before sending
+	logger.Debug("[getConfigHandler] Sending response")
 	c.JSON(http.StatusOK, cfg)
 }
 
@@ -206,7 +221,7 @@ func updateConfigHandler(c *gin.Context) {
 
 	// Save the validated config to file
 	if err := appConfig.SaveConfig(&updatedConfig); err != nil {
-		fmt.Printf("Error saving config: %v\n", err) // Log error server-side
+		logger.Error("Error saving config to file", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save configuration"})
 		return
 	}
@@ -215,7 +230,7 @@ func updateConfigHandler(c *gin.Context) {
 	// Other parts of the application might rely on this in-memory version
 	currentConfig = &updatedConfig
 
-	fmt.Printf("Configuration updated and saved: %+v\n", currentConfig)
+	logger.Info("Configuration updated and saved successfully", "newConfig", currentConfig)
 
 	// Return the newly saved configuration (which should match what GET returns now)
 	c.JSON(http.StatusOK, *currentConfig) // Keep returning current state here
@@ -235,7 +250,7 @@ func addDownloadHandler(c *gin.Context) {
 	for _, url := range req.Urls {
 		job, err := queueManager.AddJob(url, req.Options)
 		if err != nil {
-			fmt.Printf("Error adding job for URL %s: %v\n", url, err)
+			logger.Error("Error adding job to queue for URL", "url", url, "error", err)
 			results = append(results, api.AddDownloadResponseItem{
 				Url:   url,
 				Error: fmt.Sprintf("Failed to add job to queue: %v", err),
@@ -315,21 +330,21 @@ func sseStatusHandler(c *gin.Context) {
 			var sseEvent api.SSEEvent
 			if json.Unmarshal(msgBytes, &sseEvent) == nil {
 				// Successfully unmarshalled, use the Type field
-				fmt.Printf("[SSE Handler] Sending event: %s with data length: %d\n", sseEvent.Type, len(msgBytes))
+				logger.Debug("[SSE Handler] Sending event", "eventType", sseEvent.Type, "dataLength", len(msgBytes))
 				// Still send the original msgBytes containing the wrapped data
 				sse.Encode(w, sse.Event{
 					Event: string(sseEvent.Type), // Use event type from struct
 					Data:  string(msgBytes),
 				})
 			} else {
-				fmt.Println("[SSE Handler] Failed to unmarshal SSEEvent from message bytes")
+				logger.Warn("[SSE Handler] Failed to unmarshal SSEEvent from message bytes", "rawData", string(msgBytes))
 				// Optionally send a generic event if unmarshal fails?
 				sse.Encode(w, sse.Event{Event: "message", Data: string(msgBytes)})
 			}
 			return true // Continue streaming
 		case <-c.Request.Context().Done():
 			// Client disconnected
-			fmt.Println("[SSE Handler] Client disconnected.")
+			logger.Info("[SSE Handler] Client disconnected.")
 			return false // Stop streaming
 		}
 	})
@@ -385,9 +400,23 @@ func downloadFileHandler(c *gin.Context) {
 	// Try to get the job details from queue first
 	job, found := queueManager.GetJob(jobID)
 	if found && job.Status == api.StatusComplete {
-		// Use job title if available
-		sanitizedTitle = sanitizeForFilename(job.Title)
-		albumPath = filepath.Join(downloadPath, sanitizedTitle)
+		// Construct path from job details (more reliable)
+		// This assumes job.Title is populated and sanitized correctly by the worker/downloader
+		// and that it represents the album/folder name.
+		// Need to ensure job.Title is set to a filesystem-safe name.
+		// For now, we'll use job.Title if available, otherwise fallback to scanning.
+		if job.Title != "" {
+			albumPath = filepath.Join(downloadPath, sanitizeForFilename(job.Title))
+		} else {
+			// Fallback: if job.Title is not set, try to find the first available album
+			// This part is less reliable and should ideally be avoided by ensuring job.Title is always set.
+			albums, _ := findAvailableAlbums(downloadPath)
+			if len(albums) > 0 {
+				albumPath = filepath.Join(downloadPath, albums[0])
+				sanitizedTitle = albums[0]
+				logger.Info("[Download Handler] Job title not found in queue details, using first available album for download.", "jobID", jobID, "albumPath", sanitizedTitle)
+			}
+		}
 	} else {
 		// Job not in queue (server restart), scan downloads directory for available albums
 		availableAlbums, err := findAvailableAlbums(downloadPath)

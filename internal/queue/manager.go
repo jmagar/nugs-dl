@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid" // Using UUID for job IDs
 
 	// Import the shared API types
+	"nugs-dl/internal/logger" // Import the logger package
 	"nugs-dl/pkg/api"
 )
 
@@ -33,6 +34,7 @@ func (qm *QueueManager) AddJob(url string, opts api.DownloadOptions) (*api.Downl
 	for _, existingJob := range qm.jobs {
 		if existingJob.OriginalUrl == url &&
 			(existingJob.Status == api.StatusQueued || existingJob.Status == api.StatusProcessing) {
+			logger.Warn("Attempted to add a duplicate job for URL already in queue/processing", "url", url, "existingJobID", existingJob.ID, "existingStatus", existingJob.Status)
 			return nil, fmt.Errorf("job for URL %s already exists in queue (ID: %s, Status: %s)", url, existingJob.ID, existingJob.Status)
 		}
 	}
@@ -47,7 +49,7 @@ func (qm *QueueManager) AddJob(url string, opts api.DownloadOptions) (*api.Downl
 	}
 
 	qm.jobs = append(qm.jobs, job)
-	fmt.Printf("[QueueManager] Job added: ID=%s, URL=%s\n", job.ID, url)
+	logger.Info("[QueueManager] Job added to queue", "jobID", job.ID, "url", url)
 	return job, nil
 }
 
@@ -115,11 +117,11 @@ func (qm *QueueManager) UpdateJobStatus(jobID string, status api.JobStatus, errM
 					job.Progress = 100 // Ensure progress is 100 on completion
 				}
 			}
-			fmt.Printf("[QueueManager] Job status updated: ID=%s, Status=%s\n", job.ID, status)
+			logger.Info("[QueueManager] Job status updated", "jobID", job.ID, "newStatus", status)
 			return true
 		}
 	}
-	fmt.Printf("[QueueManager] Failed to update status for unknown job ID: %s\n", jobID)
+	logger.Warn("[QueueManager] Failed to update status for unknown job ID", "jobID", jobID)
 	return false
 }
 
@@ -135,7 +137,7 @@ func (qm *QueueManager) GetNextJob() (*api.DownloadJob, bool) {
 			now := time.Now().UTC()
 			job.Status = api.StatusProcessing
 			job.StartedAt = &now
-			fmt.Printf("[QueueManager] Picking next job: ID=%s\n", job.ID)
+			logger.Info("[QueueManager] Picking next job for processing", "jobID", job.ID)
 			// Return pointer to the job in the slice - worker needs to update it
 			return job, true
 		}
@@ -152,12 +154,11 @@ func (qm *QueueManager) UpdateJobArtwork(jobID string, artworkURL string) bool {
 	for _, job := range qm.jobs {
 		if job.ID == jobID {
 			job.ArtworkURL = artworkURL
-			// Optional: Log this update?
-			// fmt.Printf("[QueueManager] Artwork updated for Job ID: %s\n", jobID)
+			logger.Debug("[QueueManager] Artwork updated for job", "jobID", jobID, "artworkURL", artworkURL)
 			return true
 		}
 	}
-	fmt.Printf("[QueueManager] Failed to update artwork for unknown job ID: %s\n", jobID)
+	logger.Warn("[QueueManager] Failed to update artwork for unknown job ID", "jobID", jobID)
 	return false
 }
 
@@ -169,11 +170,11 @@ func (qm *QueueManager) UpdateJobTitle(jobID string, title string) bool {
 	for _, job := range qm.jobs {
 		if job.ID == jobID {
 			job.Title = title
-			fmt.Printf("[QueueManager] Title updated for Job ID: %s -> %s\n", jobID, title)
+			logger.Info("[QueueManager] Title updated for job", "jobID", jobID, "newTitle", title)
 			return true
 		}
 	}
-	fmt.Printf("[QueueManager] Failed to update title for unknown job ID: %s\n", jobID)
+	logger.Warn("[QueueManager] Failed to update title for unknown job ID", "jobID", jobID)
 	return false
 }
 
@@ -195,12 +196,16 @@ func (qm *QueueManager) UpdateJobProgress(jobID string, progress float64, speedB
 			if totalTracks > 0 {
 				job.TotalTracks = totalTracks
 			}
-			fmt.Printf("[QueueManager] Progress updated for Job ID: %s -> %.1f%% (Track %d/%d, Speed: %d B/s)\n", 
-				jobID, progress, currentTrack, totalTracks, speedBps)
+			logger.Debug("[QueueManager] Progress updated for job", 
+				"jobID", jobID, 
+				"progress", progress, 
+				"currentTrack", currentTrack, 
+				"totalTracks", totalTracks, 
+				"speedBPS", speedBps)
 			return true
 		}
 	}
-	fmt.Printf("[QueueManager] Failed to update progress for unknown job ID: %s\n", jobID)
+	logger.Warn("[QueueManager] Failed to update progress for unknown job ID", "jobID", jobID)
 	return false
 }
 
@@ -219,14 +224,14 @@ func (qm *QueueManager) RemoveJob(jobID string) bool {
 				removeIndex = i
 				break
 			} else {
-				fmt.Printf("[QueueManager] Cannot remove job %s in state %s\n", jobID, job.Status)
+				logger.Warn("[QueueManager] Cannot remove job due to its current state", "jobID", jobID, "status", job.Status)
 				return false // Cannot remove job in this state
 			}
 		}
 	}
 
 	if removeIndex == -1 {
-		fmt.Printf("[QueueManager] Failed to remove job: ID %s not found\n", jobID)
+		logger.Warn("[QueueManager] Failed to remove job: ID not found", "jobID", jobID)
 		return false // Job not found
 	}
 
@@ -234,8 +239,43 @@ func (qm *QueueManager) RemoveJob(jobID string) bool {
 	// https://github.com/golang/go/wiki/SliceTricks#delete
 	qm.jobs = append(qm.jobs[:removeIndex], qm.jobs[removeIndex+1:]...)
 
-	fmt.Printf("[QueueManager] Job removed: ID=%s\n", jobID)
+	logger.Info("[QueueManager] Job removed from queue", "jobID", jobID)
 	return true
+}
+
+// UpdateJobContainerID updates the ContainerID for a specific job.
+func (qm *QueueManager) UpdateJobContainerID(jobID string, containerID string) bool {
+	qm.mutex.Lock()
+	defer qm.mutex.Unlock()
+
+	for _, job := range qm.jobs {
+		if job.ID == jobID {
+			job.ContainerID = containerID
+			logger.Info("[QueueManager] ContainerID updated for job", "jobID", jobID, "containerID", containerID)
+			return true
+		}
+	}
+	logger.Warn("[QueueManager] Failed to update ContainerID for unknown job ID", "jobID", jobID)
+	return false
+}
+
+// HasCompletedJobWithContainerID checks if a job with the given ContainerID has already been completed.
+// It returns true and the ID of the completed job if found, otherwise false and an empty string.
+func (qm *QueueManager) HasCompletedJobWithContainerID(containerID string) (bool, string) {
+	qm.mutex.RLock()
+	defer qm.mutex.RUnlock()
+
+	if containerID == "" { // Cannot check for empty containerID
+		return false, ""
+	}
+
+	for _, job := range qm.jobs {
+		if job.ContainerID == containerID && job.Status == api.StatusComplete {
+			logger.Info("[QueueManager] Found existing completed job with matching ContainerID", "checkedContainerID", containerID, "foundJobID", job.ID)
+			return true, job.ID
+		}
+	}
+	return false, ""
 }
 
 // TODO: Add functions for updating progress, current file, speed, artwork URL.

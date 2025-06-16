@@ -1,18 +1,19 @@
 package worker
 
 import (
-	"fmt"
+	"errors" // Added for errors.Is
 	"time"
 
 	"nugs-dl/internal/broadcast"
 	"nugs-dl/internal/downloader"
+	"nugs-dl/internal/logger" // Import the logger package
 	"nugs-dl/internal/queue"
 	"nugs-dl/pkg/api"
 )
 
 // StartWorker launches a background goroutine to process jobs from the queue.
 func StartWorker(qm *queue.QueueManager, dl *downloader.Downloader, hub *broadcast.Hub) {
-	fmt.Println("[Worker] Starting background queue processor...")
+	logger.Info("[Worker] Starting background queue processor...")
 
 	go func() {
 		for {
@@ -25,7 +26,7 @@ func StartWorker(qm *queue.QueueManager, dl *downloader.Downloader, hub *broadca
 				continue
 			}
 
-			fmt.Printf("[Worker] Processing job ID: %s, URL: %s\n", job.ID, job.OriginalUrl)
+			logger.Info("[Worker] Processing job", "jobID", job.ID, "url", job.OriginalUrl)
 
 			// Execute the download logic
 			// Pass the whole job object to the Download method
@@ -33,19 +34,36 @@ func StartWorker(qm *queue.QueueManager, dl *downloader.Downloader, hub *broadca
 
 			// Update job status based on the result
 			if err != nil {
-				fmt.Printf("[Worker] Job ID %s failed: %v\n", job.ID, err)
-				qm.UpdateJobStatus(job.ID, api.StatusFailed, err.Error())
-				// Update the job object directly and broadcast
-				job.Status = api.StatusFailed
-				job.ErrorMessage = err.Error()
-				now := time.Now().UTC()
-				if job.CompletedAt == nil {
-					job.CompletedAt = &now
+				if errors.Is(err, downloader.ErrDuplicateCompleted) {
+					logger.Info("[Worker] Job is a duplicate of already completed content, skipping.", "jobID", job.ID, "originalError", err.Error())
+					// Update job status to Failed with the specific duplicate error message
+					qm.UpdateJobStatus(job.ID, api.StatusFailed, err.Error()) // err.Error() will contain the formatted message
+
+					job.Status = api.StatusFailed
+					job.ErrorMessage = err.Error() // Use the detailed error message
+					now := time.Now().UTC()
+					if job.CompletedAt == nil { // Mark as "completed" in terms of processing attempt
+						job.CompletedAt = &now
+					}
+					logger.Debug("[Worker] Broadcasting skipped (duplicate) job status", "jobID", job.ID)
+					hub.BroadcastJobStatusUpdate(job) // Broadcast the update
+				} else {
+					// Handle other general errors
+					logger.Error("[Worker] Job failed with a general error", "jobID", job.ID, "error", err)
+					qm.UpdateJobStatus(job.ID, api.StatusFailed, err.Error())
+					// Update the job object directly and broadcast
+					job.Status = api.StatusFailed
+					job.ErrorMessage = err.Error()
+					now := time.Now().UTC()
+					if job.CompletedAt == nil {
+						job.CompletedAt = &now
+					}
+					logger.Debug("[Worker] Broadcasting failed job status", "jobID", job.ID)
+					hub.BroadcastJobStatusUpdate(job)
 				}
-				fmt.Printf("[Worker] Broadcasting failed job status: %s\n", job.ID)
-				hub.BroadcastJobStatusUpdate(job)
 			} else {
-				fmt.Printf("[Worker] Job ID %s completed successfully.\n", job.ID)
+				// Handle successful completion
+				logger.Info("[Worker] Job completed successfully", "jobID", job.ID)
 				qm.UpdateJobStatus(job.ID, api.StatusComplete, "")
 				// Update the job object directly and broadcast
 				job.Status = api.StatusComplete
@@ -55,7 +73,7 @@ func StartWorker(qm *queue.QueueManager, dl *downloader.Downloader, hub *broadca
 				if job.CompletedAt == nil {
 					job.CompletedAt = &now
 				}
-				fmt.Printf("[Worker] Broadcasting completed job status: %s\n", job.ID)
+				logger.Debug("[Worker] Broadcasting completed job status", "jobID", job.ID)
 				hub.BroadcastJobStatusUpdate(job)
 			}
 

@@ -59,6 +59,43 @@ const MainContentTabs = () => {
     const [isLoading, setIsLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
+    // Function to add a single URL to the download queue, to be passed to QueueManager
+    const addSingleUrlToQueue = async (url: string): Promise<void> => {
+      const payload = {
+        urls: [url],
+        options: { forceVideo: false, skipVideos: false, skipChapters: false }, // Default options
+      };
+      // Consider adding a loading state specific to the toggle button if needed
+      // toast.info(`Adding ${url} to queue...`); // Toast is handled in QueueItem now
+      try {
+        const response = await fetch('/api/downloads', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+          let errorMsg = `HTTP error! status: ${response.status}`;
+          try {
+            const errorData = await response.json();
+            errorMsg = errorData.error || errorMsg;
+          } catch {
+            // If parsing errorData fails, use the original statusText
+            errorMsg = response.statusText || errorMsg;
+          }
+          throw new Error(errorMsg);
+        }
+        const results = await response.json();
+        if (results[0]?.error) {
+          throw new Error(results[0].error);
+        }
+        // Success toast is now handled in QueueItem after this promise resolves
+      } catch (err) {
+        console.error(`Error adding ${url} to queue:`, err);
+        // Error toast is now handled in QueueItem after this promise rejects
+        throw err; // Re-throw for QueueItem to handle specific error messaging
+      }
+    };
+
     const switchToQueue = () => {
         setActiveTab("queue")
     }
@@ -240,10 +277,10 @@ const MainContentTabs = () => {
         <div className="w-full max-w-4xl mx-auto space-y-8">
             <section className="text-center space-y-6">
                 <h1 className="text-4xl md:text-6xl font-bold leading-tight tracking-tight">
-                    Download from <span className="bg-gradient-to-r from-purple-400 via-pink-400 to-purple-600 text-transparent bg-clip-text animate-gradient-x">nugs.net</span> with ease
+                    Archive your favorites from <span className="bg-gradient-to-r from-purple-400 via-pink-400 to-purple-600 text-transparent bg-clip-text animate-gradient-x">nugs.net</span>
                 </h1>
                 <p className="text-xl text-gray-300 max-w-3xl mx-auto leading-relaxed">
-                    A powerful tool to download albums, videos, and livestreams from nugs.net in your preferred quality.
+                    A powerful tool to archive your favorite albums, videos, and livestreams from nugs.net in your preferred quality.
                 </p>
             </section>
 
@@ -282,13 +319,13 @@ const MainContentTabs = () => {
                 
                 <TabsContent value="queue" className="space-y-6">
                     <div className="bg-gray-800/60 backdrop-blur-sm border border-gray-700/50 rounded-xl p-8 shadow-xl shadow-purple-500/10 hover:shadow-purple-500/20 transition-all duration-300">
-                        <QueueManager jobs={jobs} isLoading={isLoading} error={error} />
+                        <QueueManager jobs={jobs} isLoading={isLoading} error={error} onAddDownload={addSingleUrlToQueue} />
                     </div>
                 </TabsContent>
                 
                 <TabsContent value="history" className="space-y-6">
                     <div className="bg-gray-800/60 backdrop-blur-sm border border-gray-700/50 rounded-xl p-8 shadow-xl shadow-purple-500/10 hover:shadow-purple-500/20 transition-all duration-300">
-                        <HistoryManager />
+                        <HistoryManager onAddDownload={addSingleUrlToQueue} />
                     </div>
                 </TabsContent>
             </Tabs>

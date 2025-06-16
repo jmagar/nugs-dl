@@ -144,7 +144,7 @@ The application supports downloading from various nugs.net URLs:
 | Type | Example URL |
 |------|-------------|
 | **Album** | `https://play.nugs.net/release/23329` |
-| **Artist** | `https://play.nugs.net/#/artist/461/latest` |
+| **Artist** | `https://play.nugs.net/#/artist/461/latest` | `https://play.nugs.net/#/artist/461` |
 | **Playlist** | `https://play.nugs.net/#/playlists/playlist/1215400` |
 | **Video** | `https://play.nugs.net/#/videos/artist/1045/Dead%20and%20Company/container/27323` |
 | **Livestream** | `https://play.nugs.net/watch/livestreams/exclusive/30119` |
